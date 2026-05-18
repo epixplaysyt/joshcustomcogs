@@ -53,11 +53,9 @@ class RoleAutomation(commands.Cog):
         guild = ctx.guild
         author = ctx.author
         
-        # Default to the command invoker if no member is provided
         if member is None:
             member = author
             
-        # Permission check: If trying to update someone else, user must be an admin
         if member != author:
             is_admin = author.guild_permissions.administrator or await self.bot.is_admin(author)
             if not is_admin:
@@ -78,7 +76,6 @@ class RoleAutomation(commands.Cog):
             await ctx.send("❌ Configured automation roles could not be found in the server.", ephemeral=True)
             return
 
-        # Condition Check: If they do not have Role X, do nothing and do not give Role Y
         if trigger_role not in member.roles:
             if member == author:
                 await ctx.send(f"ℹ️ You do not currently have the required trigger role (**{trigger_role.name}**). No changes were made.", ephemeral=True)
@@ -86,7 +83,6 @@ class RoleAutomation(commands.Cog):
                 await ctx.send(f"ℹ️ **{member.display_name}** does not have the trigger role (**{trigger_role.name}**). No changes were made.", ephemeral=True)
             return
 
-        # Perform the manual swap
         try:
             await member.remove_roles(trigger_role, reason=f"Manual Role Swap requested by {author.display_name}")
             await member.add_roles(replacement_role, reason=f"Manual Role Swap requested by {author.display_name}")
@@ -165,6 +161,3 @@ class RoleAutomation(commands.Cog):
                     f"- Members updated (Role removed): `{removed_count}`\n"
                     f"- Failed updates (Hierarchy/Permissions issue): `{failed_count}`"
         )
-
-async def setup(bot):
-    await bot.add_cog(RoleAutomation(bot))
