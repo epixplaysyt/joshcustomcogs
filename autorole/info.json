@@ -1,0 +1,9 @@
+{
+    "author": ["Josh"],
+    "description": "Automates role replacement on assignment and runs server-wide role condition audits.",
+    "disabled": false,
+    "name": "RoleAutomation",
+    "short": "Automate role handling and audits.",
+    "tags": ["utility", "role", "automation"],
+    "requirements": []
+}
