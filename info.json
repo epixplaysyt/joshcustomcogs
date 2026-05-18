@@ -1,8 +1,8 @@
 {
-    "author" : ["locastan"],
-    "install_msg" : "Thank you for installing my repository.",
-    "name" : "LocaCogs",
-    "short" : "Repo for just the GoblinsComic inspired RPG bot for now.",
-    "description" : "Play a RPG character and get loot by killing monsters.",
-    "tags" : ["Games", "Economy", "Fun", "RPG"]
+    "author" : ["josh"],
+    "install_msg" : "Successfully installed!",
+    "name" : "JCC",
+    "short" : "Josh's Custom Cogs made for my bots!",
+    "description" : "Josh's Custom Cogs made for my bots!",
+    "tags" : ["Utility"]
 }
