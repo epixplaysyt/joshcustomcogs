@@ -108,27 +108,28 @@ class DMUtils(commands.Cog):
     @commands.guild_only()
     @commands.admin_or_permissions(manage_messages=True)
     async def staff_message(self, ctx: commands.Context, user: discord.Member, *, message: str):
-        """Send a direct message to a user as staff and open a tracked conversation session."""
+        """Send an initial message to a user as staff and open an interactive conversation channel."""
+        if user.id in self.active_conversations:
+            return await ctx.send(f"⚠️ **{user.display_name}** already has an active conversation open. Use `[p]staffreply` to message them.")
+
         conv_id = f"M{secrets.token_hex(4).upper()}"
 
         embed = discord.Embed(
             title="Message from Server Staff",
-            description=f"{message}\n\n*ℹ️ You can reply directly to this DM to message the staff member back.*"
+            description=f"{message}\n\n*ℹ️ You can reply directly to this message to text staff back, or type `stop` to end the conversation.*"
         )
-        embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+        embed.set_author(name=f"{ctx.author.display_name} | Session: #{conv_id}", icon_url=ctx.author.display_avatar.url)
         
         self._apply_template(embed)
 
         try:
             await user.send(embed=embed)
             
-            # Save the active target mapping and preserve the specific Conversation ID
             self.active_conversations[user.id] = {
                 "staff_id": ctx.author.id,
                 "conversation_id": conv_id
             }
 
-            # Securely log the initial message metadata to the system database
             async with self.config.guild(ctx.guild).messages() as messages:
                 messages[conv_id] = {
                     "staff_id": ctx.author.id,
@@ -138,9 +139,83 @@ class DMUtils(commands.Cog):
                     "initial_content": message
                 }
 
-            await ctx.send(f"✅ Message sent to **{user.display_name}**. (Session ID: `#{conv_id}`)\nReplies will be auto-forwarded back to your direct messages.")
+            await ctx.send(f"✅ Conversation successfully initiated with **{user.display_name}**. (Session ID: `#{conv_id}`)\nUse `[p]staffreply @user <message>` to keep texting them, or `[p]stopdm @user` to close the connection.")
         except discord.Forbidden:
             await ctx.send(f"❌ **{user.display_name}** has their DMs disabled. I could not deliver the message.")
+
+    @commands.command(name="staffreply")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_messages=True)
+    async def staff_reply(self, ctx: commands.Context, user: discord.Member, *, message: str):
+        """Send a follow-up reply to an ongoing active conversation stream."""
+        session_data = self.active_conversations.get(user.id)
+        if not session_data:
+            return await ctx.send(f"❌ There are no active message sessions currently open for **{user.display_name}**. Use `[p]staffmessage` first.")
+
+        conv_id = session_data["conversation_id"]
+
+        embed = discord.Embed(
+            title="New Reply from Server Staff",
+            description=message
+        )
+        embed.set_author(name=f"{ctx.author.display_name} | Session: #{conv_id}", icon_url=ctx.author.display_avatar.url)
+        self._apply_template(embed)
+
+        try:
+            await user.send(embed=embed)
+            await ctx.message.add_reaction("✅")
+        except discord.Forbidden:
+            self.active_conversations.pop(user.id, None)
+            await ctx.send(f"❌ Failed to deliver message. **{user.display_name}** has closed their DMs. Session `#{conv_id}` has been forcefully terminated.")
+
+    @commands.command(name="stopdm")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_messages=True)
+    async def stop_dm(self, ctx: commands.Context, user: discord.Member):
+        """Staff command to close an active conversation session channel."""
+        session_data = self.active_conversations.pop(user.id, None)
+        if not session_data:
+            return await ctx.send(f"❌ There are no active chat sessions matching **{user.display_name}**.")
+
+        conv_id = session_data["conversation_id"]
+        
+        try:
+            embed = discord.Embed(
+                title="🔒 Conversation Closed",
+                description="This staff communication session has been marked as completed and closed by server management. Direct routing is now turned off."
+            )
+            embed.set_author(name=f"Session: #{conv_id}")
+            self._apply_template(embed)
+            await user.send(embed=embed)
+        except discord.Forbidden:
+            pass
+
+        await ctx.send(f"🔒 Session `#{conv_id}` with **{user.display_name}** has been closed successfully.")
+
+    @commands.command(name="stop")
+    @commands.dm_only()
+    async def user_stop(self, ctx: commands.Context):
+        """User command to end an ongoing direct message staff session."""
+        session_data = self.active_conversations.pop(ctx.author.id, None)
+        if not session_data:
+            return await ctx.send("❌ You do not have an active staff conversation session open to close.")
+
+        conv_id = session_data["conversation_id"]
+        staff_member = self.bot.get_user(session_data["staff_id"])
+
+        if staff_member:
+            try:
+                embed = discord.Embed(
+                    title="🔒 Session Closed by User",
+                    description=f"The active user communication block has been ended by the recipient."
+                )
+                embed.set_author(name=f"{ctx.author.name} ({ctx.author.id}) | Session: #{conv_id}")
+                self._apply_template(embed)
+                await staff_member.send(embed=embed)
+            except discord.Forbidden:
+                pass
+
+        await ctx.send(f"🔒 Conversation `#{conv_id}` has been disconnected. No further messages will be forwarded.")
 
     @commands.hybrid_command(name="search")
     @commands.guild_only()
@@ -178,7 +253,8 @@ class DMUtils(commands.Cog):
             embed.set_author(name="Database Verification Success")
             embed.add_field(name="Staff Dispatcher", value=f"<@{data['staff_id']}> ({data['staff_name']})", inline=True)
             embed.add_field(name="Target Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=True)
-            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}```", inline=False)
+            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}
+```", inline=False)
 
         else:
             return await ctx.send("❌ Invalid format identifier. Verification IDs must begin with **P** (Prizes) or **M** (Messages).", ephemeral=True)
@@ -199,12 +275,19 @@ class DMUtils(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """Listen for DMs from users to route back to staff."""
+        """Listen for inbound direct messages from users and forward them contextually to staff."""
         if message.guild is not None or message.author.bot:
             return
 
         session_data = self.active_conversations.get(message.author.id)
         if not session_data:
+            return
+
+        # Explicit plaintext exit check if they type stop instead of running the command structure
+        if message.content.strip().lower() == "stop":
+            # Handled internally via programmatic command invocation call logic
+            ctx = await self.bot.get_context(message)
+            await self.bot.invoke(ctx)
             return
 
         staff_member = self.bot.get_user(session_data["staff_id"])
