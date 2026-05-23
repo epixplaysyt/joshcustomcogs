@@ -1,0 +1,9 @@
+{
+    "author": ["Josh"],
+    "description": "Utilities for staff to send official DMs, custom embeds, and handle two-way contact.",
+    "disabled": false,
+    "name": "DMUtils",
+    "short": "Staff DM utilities and custom embeds.",
+    "tags": ["utility", "dm", "moderation", "embeds"],
+    "requirements": []
+}
