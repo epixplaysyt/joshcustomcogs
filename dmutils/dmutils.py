@@ -178,8 +178,7 @@ class DMUtils(commands.Cog):
             embed.set_author(name="Database Verification Success")
             embed.add_field(name="Staff Dispatcher", value=f"<@{data['staff_id']}> ({data['staff_name']})", inline=True)
             embed.add_field(name="Target Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=True)
-            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}
-```", inline=False)
+            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}```", inline=False)
 
         else:
             return await ctx.send("❌ Invalid format identifier. Verification IDs must begin with **P** (Prizes) or **M** (Messages).", ephemeral=True)
