@@ -43,11 +43,13 @@ class DMUtils(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.active_conversations: Dict[int, int] = {}
+        # Maps user_id -> {"staff_id": int, "conversation_id": str}
+        self.active_conversations: Dict[int, dict] = {}
         
         self.config = Config.get_conf(self, identifier=9876543210, force_registration=True)
         default_guild = {
-            "prizes": {}
+            "prizes": {},
+            "messages": {}
         }
         self.config.register_guild(**default_guild)
 
@@ -72,7 +74,7 @@ class DMUtils(commands.Cog):
     @commands.admin_or_permissions(manage_messages=True)
     async def prize_notify(self, ctx: commands.Context, user: discord.Member, amount: str, proof_url: str):
         """Notify a user that their prize has been paid out and generate a tracking ID."""
-        prize_id = secrets.token_hex(4).upper()
+        prize_id = f"P{secrets.token_hex(4).upper()}"
 
         embed = discord.Embed(
             title="🎉 Prize Payout Confirmation",
@@ -102,38 +104,13 @@ class DMUtils(commands.Cog):
         except discord.Forbidden:
             await ctx.send(f"❌ **{user.display_name}** has their DMs disabled. I could not send the notification.")
 
-    @commands.hybrid_command(name="prizesearch")
-    @commands.guild_only()
-    @app_commands.describe(prize_id="The unique verification ID of the prize")
-    async def prize_search(self, ctx: commands.Context, prize_id: str):
-        """Search for a prize record by its verification ID to check for scams."""
-        clean_id = prize_id.upper().replace("#", "").strip()
-        prizes = await self.config.guild(ctx.guild).prizes()
-        
-        if clean_id not in prizes:
-            return await ctx.send(f"❌ No registered prize found matching the ID: `#{clean_id}`.", ephemeral=True)
-
-        data = prizes[clean_id]
-        
-        embed = discord.Embed(
-            title=f"🔍 Prize Record Found",
-            description=f"Authentic receipt verification details for transaction identifier `#{clean_id}`."
-        )
-        embed.set_author(name=f"Database Verification Success")
-        embed.add_field(name="Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=False)
-        embed.add_field(name="Amount Paid", value=data['amount'], inline=True)
-        embed.add_field(name="Authorized By", value=f"<@{data['authorizer_id']}> ({data['authorizer_name']})", inline=True)
-        
-        self._handle_proof_attachment(embed, data['proof_url'], "Proof Registry Link")
-        self._apply_template(embed)
-        
-        await ctx.send(embed=embed, ephemeral=True)
-
     @commands.command(name="staffmessage")
     @commands.guild_only()
     @commands.admin_or_permissions(manage_messages=True)
     async def staff_message(self, ctx: commands.Context, user: discord.Member, *, message: str):
-        """Send a direct message to a user as staff."""
+        """Send a direct message to a user as staff and open a tracked conversation session."""
+        conv_id = f"M{secrets.token_hex(4).upper()}"
+
         embed = discord.Embed(
             title="Message from Server Staff",
             description=f"{message}\n\n*ℹ️ You can reply directly to this DM to message the staff member back.*"
@@ -144,10 +121,71 @@ class DMUtils(commands.Cog):
 
         try:
             await user.send(embed=embed)
-            self.active_conversations[user.id] = ctx.author.id
-            await ctx.send(f"✅ Message sent to **{user.display_name}**. Any replies they send to me will be forwarded directly to your DMs.")
+            
+            # Save the active target mapping and preserve the specific Conversation ID
+            self.active_conversations[user.id] = {
+                "staff_id": ctx.author.id,
+                "conversation_id": conv_id
+            }
+
+            # Securely log the initial message metadata to the system database
+            async with self.config.guild(ctx.guild).messages() as messages:
+                messages[conv_id] = {
+                    "staff_id": ctx.author.id,
+                    "staff_name": str(ctx.author),
+                    "user_id": user.id,
+                    "user_name": str(user),
+                    "initial_content": message
+                }
+
+            await ctx.send(f"✅ Message sent to **{user.display_name}**. (Session ID: `#{conv_id}`)\nReplies will be auto-forwarded back to your direct messages.")
         except discord.Forbidden:
             await ctx.send(f"❌ **{user.display_name}** has their DMs disabled. I could not deliver the message.")
+
+    @commands.hybrid_command(name="search")
+    @commands.guild_only()
+    @app_commands.describe(search_id="The unique verification ID starting with P (Prize) or M (Message)")
+    async def search(self, ctx: commands.Context, search_id: str):
+        """Search the verification registries for an active Prize or Staff Message tracking reference ID."""
+        clean_id = search_id.upper().replace("#", "").strip()
+        
+        if clean_id.startswith("P"):
+            prizes = await self.config.guild(ctx.guild).prizes()
+            if clean_id not in prizes:
+                return await ctx.send(f"❌ No registered prize payout match found for ID: `#{clean_id}`.", ephemeral=True)
+            
+            data = prizes[clean_id]
+            embed = discord.Embed(
+                title="🔍 Prize Registry Log Found",
+                description=f"Authentic receipt verification details for transaction identifier `#{clean_id}`."
+            )
+            embed.set_author(name="Database Verification Success")
+            embed.add_field(name="Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=False)
+            embed.add_field(name="Amount Paid", value=data['amount'], inline=True)
+            embed.add_field(name="Authorized By", value=f"<@{data['authorizer_id']}> ({data['authorizer_name']})", inline=True)
+            self._handle_proof_attachment(embed, data['proof_url'], "Proof Registry Link")
+
+        elif clean_id.startswith("M"):
+            messages = await self.config.guild(ctx.guild).messages()
+            if clean_id not in messages:
+                return await ctx.send(f"❌ No registered conversation match found for ID: `#{clean_id}`.", ephemeral=True)
+            
+            data = messages[clean_id]
+            embed = discord.Embed(
+                title="🔍 Conversation Session Found",
+                description=f"Authentic messaging session validation for tracking identifier `#{clean_id}`."
+            )
+            embed.set_author(name="Database Verification Success")
+            embed.add_field(name="Staff Dispatcher", value=f"<@{data['staff_id']}> ({data['staff_name']})", inline=True)
+            embed.add_field(name="Target Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=True)
+            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}
+```", inline=False)
+
+        else:
+            return await ctx.send("❌ Invalid format identifier. Verification IDs must begin with **P** (Prizes) or **M** (Messages).", ephemeral=True)
+
+        self._apply_template(embed)
+        await ctx.send(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(name="customembed")
     @commands.guild_only()
@@ -166,19 +204,21 @@ class DMUtils(commands.Cog):
         if message.guild is not None or message.author.bot:
             return
 
-        staff_id = self.active_conversations.get(message.author.id)
-        if not staff_id:
+        session_data = self.active_conversations.get(message.author.id)
+        if not session_data:
             return
 
-        staff_member = self.bot.get_user(staff_id)
+        staff_member = self.bot.get_user(session_data["staff_id"])
         if not staff_member:
             return
+
+        conv_id = session_data["conversation_id"]
 
         embed = discord.Embed(
             title="New Reply Received",
             description=message.content
         )
-        embed.set_author(name=f"{message.author.name} ({message.author.id})", icon_url=message.author.display_avatar.url)
+        embed.set_author(name=f"{message.author.name} ({message.author.id}) | Session: #{conv_id}", icon_url=message.author.display_avatar.url)
         
         self._apply_template(embed)
 
@@ -191,3 +231,4 @@ class DMUtils(commands.Cog):
             await message.add_reaction("✅")
         except discord.Forbidden:
             await message.channel.send("⚠️ I couldn't deliver your message because the staff member's DMs are currently closed.")
+            
