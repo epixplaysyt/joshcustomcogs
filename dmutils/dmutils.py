@@ -193,7 +193,7 @@ class DMUtils(commands.Cog):
             await staff_member.send(embed=embed)
             await message.add_reaction("✅")
         except discord.Forbidden:
-            await message.channel.send("⚠️ I couldn't deliver your message because the staff member's DMs are currently closed.")        
+            await message.channel.send("⚠️ I couldn't deliver your message because the staff member's DMs are currently closed.")
         except Exception as e:
             await interaction.response.send_message(f"❌ An error occurred: `{e}`", ephemeral=True)
 
