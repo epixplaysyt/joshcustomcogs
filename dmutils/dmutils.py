@@ -116,7 +116,7 @@ class DMUtils(commands.Cog):
 
         embed = discord.Embed(
             title="Message from Server Staff",
-            description=f"{message}\n\n*ℹ️ You can reply directly to this message to text staff back, or type `stop` to end the conversation.*"
+            description=f"{message}\n\n*ℹ️ Reply directly to pass a message back to staff, or type `stop` at any time to end this chat session.*"
         )
         embed.set_author(name=f"{ctx.author.display_name} | Session: #{conv_id}", icon_url=ctx.author.display_avatar.url)
         
@@ -156,7 +156,7 @@ class DMUtils(commands.Cog):
 
         embed = discord.Embed(
             title="New Reply from Server Staff",
-            description=message
+            description=f"{message}\n\n*ℹ️ Reply directly to pass a message back to staff, or type `stop` at any time to end this chat session.*"
         )
         embed.set_author(name=f"{ctx.author.display_name} | Session: #{conv_id}", icon_url=ctx.author.display_avatar.url)
         self._apply_template(embed)
@@ -253,7 +253,8 @@ class DMUtils(commands.Cog):
             embed.set_author(name="Database Verification Success")
             embed.add_field(name="Staff Dispatcher", value=f"<@{data['staff_id']}> ({data['staff_name']})", inline=True)
             embed.add_field(name="Target Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=True)
-            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}```", inline=False)
+            embed.add_field(name="Opening Content Stack", value=f"```{data['initial_content']}
+```", inline=False)
 
         else:
             return await ctx.send("❌ Invalid format identifier. Verification IDs must begin with **P** (Prizes) or **M** (Messages).", ephemeral=True)
@@ -284,7 +285,6 @@ class DMUtils(commands.Cog):
 
         # Explicit plaintext exit check if they type stop instead of running the command structure
         if message.content.strip().lower() == "stop":
-            # Handled internally via programmatic command invocation call logic
             ctx = await self.bot.get_context(message)
             await self.bot.invoke(ctx)
             return
@@ -312,4 +312,3 @@ class DMUtils(commands.Cog):
             await message.add_reaction("✅")
         except discord.Forbidden:
             await message.channel.send("⚠️ I couldn't deliver your message because the staff member's DMs are currently closed.")
-            
