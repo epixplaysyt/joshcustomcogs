@@ -1,7 +1,8 @@
 import discord
 import json
+import secrets
 from typing import Dict
-from redbot.core import commands, app_commands
+from redbot.core import commands, app_commands, Config
 
 TEMPLATE_COLOR = 15702551
 TEMPLATE_FOOTER_TEXT = "Copyright © MM Tech Studios: https://discord.com/invite/DVaRQRQRcB"
@@ -43,6 +44,12 @@ class DMUtils(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_conversations: Dict[int, int] = {}
+        
+        self.config = Config.get_conf(self, identifier=9876543210, force_registration=True)
+        default_guild = {
+            "prizes": {}
+        }
+        self.config.register_guild(**default_guild)
 
     def _apply_template(self, embed: discord.Embed) -> discord.Embed:
         """Helper method to inject the strict brand layout configurations."""
@@ -50,26 +57,81 @@ class DMUtils(commands.Cog):
         embed.set_footer(text=TEMPLATE_FOOTER_TEXT, icon_url=TEMPLATE_FOOTER_ICON)
         return embed
 
+    def _handle_proof_attachment(self, embed: discord.Embed, url: str, field_name: str):
+        """Helper to add proof hyperlinks and embed the image if a valid format is detected."""
+        embed.add_field(name=field_name, value=f"[Click here to view proof]({url})", inline=False)
+        
+        # Strip Discord URL query parameters (?ex=...&is=...) to safely isolate the file extension
+        clean_url = url.split("?")[0].lower()
+        image_extensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+        
+        if any(clean_url.endswith(ext) for ext in image_extensions):
+            embed.set_image(url=url)
+
     @commands.command(name="prizenotify")
     @commands.guild_only()
     @commands.admin_or_permissions(manage_messages=True)
     async def prize_notify(self, ctx: commands.Context, user: discord.Member, amount: str, proof_url: str):
-        """Notify a user that their prize has been paid out."""
+        """Notify a user that their prize has been paid out and generate a tracking ID."""
+        prize_id = secrets.token_hex(4).upper()
+
         embed = discord.Embed(
             title="🎉 Prize Payout Confirmation",
             description="Congratulations! Your recent prize has been successfully processed and paid out."
         )
+        embed.set_author(name=f"Verification ID: #{prize_id}")
         embed.add_field(name="Amount", value=amount, inline=True)
         embed.add_field(name="Authorized By", value=ctx.author.display_name, inline=True)
-        embed.add_field(name="Proof of Payment", value=f"[Click here to view proof]({proof_url})", inline=False)
+        
+        # Attach proof hyperlink and attempt image embedding
+        self._handle_proof_attachment(embed, proof_url, "Proof of Payment")
         
         self._apply_template(embed)
 
         try:
             await user.send(embed=embed)
-            await ctx.send(f"✅ Prize payout notification successfully sent to **{user.display_name}**.")
+            
+            async with self.config.guild(ctx.guild).prizes() as prizes:
+                prizes[prize_id] = {
+                    "user_id": user.id,
+                    "user_name": str(user),
+                    "amount": amount,
+                    "authorizer_id": ctx.author.id,
+                    "authorizer_name": str(ctx.author),
+                    "proof_url": proof_url
+                }
+                
+            await ctx.send(f"✅ Prize payout notification successfully sent to **{user.display_name}**. (ID: `#{prize_id}`)")
         except discord.Forbidden:
             await ctx.send(f"❌ **{user.display_name}** has their DMs disabled. I could not send the notification.")
+
+    @commands.command(name="prizesearch")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_messages=True)
+    async def prize_search(self, ctx: commands.Context, prize_id: str):
+        """Search for a prize record by its verification ID to prevent scams."""
+        clean_id = prize_id.upper().replace("#", "").strip()
+        prizes = await self.config.guild(ctx.guild).prizes()
+        
+        if clean_id not in prizes:
+            return await ctx.send(f"❌ No registered prize found matching the ID: `#{clean_id}`. Treat this interaction with caution.")
+
+        data = prizes[clean_id]
+        
+        embed = discord.Embed(
+            title=f"🔍 Prize Record Found",
+            description=f"Authentic receipt verification details for transaction identifier `#{clean_id}`."
+        )
+        embed.set_author(name=f"Database Lookup")
+        embed.add_field(name="Recipient", value=f"<@{data['user_id']}> ({data['user_name']})", inline=False)
+        embed.add_field(name="Amount Paid", value=data['amount'], inline=True)
+        embed.add_field(name="Authorized By", value=f"<@{data['authorizer_id']}> ({data['authorizer_name']})", inline=True)
+        
+        # Attach proof hyperlink and attempt image embedding from saved database parameters
+        self._handle_proof_attachment(embed, data['proof_url'], "Proof Registry Link")
+        
+        self._apply_template(embed)
+        await ctx.send(embed=embed)
 
     @commands.command(name="staffmessage")
     @commands.guild_only()
