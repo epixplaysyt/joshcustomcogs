@@ -4,11 +4,10 @@ from discord import app_commands
 import datetime
 
 class ManagerApprovalView(discord.ui.View):
-    def __init__(self, cog, interaction: discord.Interaction, question: str, channel: discord.TextChannel, reg_cd: int, win_cd: int):
+    def __init__(self, cog, interaction: discord.Interaction, channel: discord.TextChannel, reg_cd: int, win_cd: int):
         super().__init__(timeout=None)
         self.cog = cog
         self.interaction = interaction
-        self.question = question
         self.channel = channel
         self.reg_cd = reg_cd
         self.win_cd = win_cd
@@ -16,7 +15,7 @@ class ManagerApprovalView(discord.ui.View):
     @discord.ui.button(label="Allow", style=discord.ButtonStyle.success)
     async def allow(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("You have approved the guessing session.")
-        await self.cog._open_guessing_channel(self.interaction.guild, self.channel, self.question, self.reg_cd, self.win_cd)
+        await self.cog._open_guessing_channel(self.interaction.guild, self.channel, self.reg_cd, self.win_cd)
         self.stop()
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
@@ -29,7 +28,7 @@ class ManagerApprovalView(discord.ui.View):
         self.stop()
 
 class Guesses(commands.Cog):
-    """Cog for managing a customisable #guesses channel game."""
+    """Cog for managing a customisable #guesses channel game linked to an external question channel."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -43,8 +42,8 @@ class Guesses(commands.Cog):
             "role_probation": None,
             "role_winner": None,
             "role_booster": None,
-            "msg_open": "🎯 New Guessing Session Started!\n**Question:** {question}",
-            "msg_close": "🛑 Guessing Closed!\nThe correct answer was: **{answer}**",
+            "msg_open": "🎯 **A new guessing session has started!**\nCheck out the question posted in <#1331301801927905423> and submit your guesses here!",
+            "msg_close": "🛑 **Guessing Closed!**\nThe correct answer was: **{answer}**",
             "msg_duplicate": "{user}, you have already made that guess for this question!",
             "msg_cooldown": "{user}, you are on cooldown! You can guess again in {time}."
         }
@@ -59,7 +58,7 @@ class Guesses(commands.Cog):
         self.session_regular_cd = 120 
         self.session_winner_cd = 30
 
-    async def _open_guessing_channel(self, guild, channel, question: str, reg_cd: int, win_cd: int):
+    async def _open_guessing_channel(self, guild, channel, reg_cd: int, win_cd: int):
         """Helper method to handle the actual unlocking logic and set session cooldowns."""
         self.is_active = True
         self.user_guesses.clear()
@@ -73,14 +72,12 @@ class Guesses(commands.Cog):
         await channel.set_permissions(guild.default_role, send_messages=True)
         
         # Get custom open message
-        msg_template = await self.config.guild(guild).msg_open()
-        msg_text = msg_template.replace("{question}", question)
+        msg_text = await self.config.guild(guild).msg_open()
         
         embed = discord.Embed(
             description=msg_text,
             color=discord.Color.green()
         )
-        # Optional: Add a footer showing the current cooldown settings
         embed.set_footer(text=f"Cooldowns | Regular: {reg_cd}m | Winners: {win_cd}m")
         
         await channel.send(embed=embed)
@@ -89,9 +86,8 @@ class Guesses(commands.Cog):
     # SLASH COMMANDS (ACTIONS)
     # ========================
 
-    @app_commands.command(name="guessopen", description="Unlocks the configured guesses channel and posts a question.")
+    @app_commands.command(name="guessopen", description="Unlocks the configured guesses channel and links to the question channel.")
     @app_commands.describe(
-        question="The question for users to guess",
         regular_cooldown="Cooldown for regular users (Defaults to 2 Hours)",
         winner_cooldown="Cooldown for previous winners (Defaults to 30 Mins)"
     )
@@ -111,7 +107,7 @@ class Guesses(commands.Cog):
             app_commands.Choice(name="2 Hours", value=120)
         ]
     )
-    async def guessopen(self, interaction: discord.Interaction, question: str, regular_cooldown: int = 120, winner_cooldown: int = 30):
+    async def guessopen(self, interaction: discord.Interaction, regular_cooldown: int = 120, winner_cooldown: int = 30):
         guild = interaction.guild
         config_data = await self.config.guild(guild).all()
         
@@ -141,11 +137,10 @@ class Guesses(commands.Cog):
                 return await interaction.response.send_message("You are on probation, but no Managers could be found to approve this.", ephemeral=True)
             
             manager = managers[0]
-            view = ManagerApprovalView(self, interaction, question, channel, regular_cooldown, winner_cooldown)
+            view = ManagerApprovalView(self, interaction, channel, regular_cooldown, winner_cooldown)
             try:
                 await manager.send(
                     f"**Approval Required:** {interaction.user.mention} (on probation) wants to open the guesses channel.\n"
-                    f"**Question:** {question}\n"
                     f"**Cooldowns:** Regular: {regular_cooldown}m | Winners: {winner_cooldown}m",
                     view=view
                 )
@@ -155,8 +150,8 @@ class Guesses(commands.Cog):
             return
 
         # Normal Execution
-        await self._open_guessing_channel(guild, channel, question, regular_cooldown, winner_cooldown)
-        await interaction.response.send_message("Guessing channel unlocked and question posted!", ephemeral=True)
+        await self._open_guessing_channel(guild, channel, regular_cooldown, winner_cooldown)
+        await interaction.response.send_message("Guessing channel unlocked!", ephemeral=True)
 
     @app_commands.command(name="guessclose", description="Locks the guesses channel and announces the answer.")
     @app_commands.describe(answer="The correct answer to the question")
@@ -242,8 +237,14 @@ class Guesses(commands.Cog):
 
     @guessset.group(name="msg")
     async def guessset_msg(self, ctx):
-        """Configure custom messages. Use {user}, {question}, {answer}, or {time} where applicable."""
+        """Configure custom messages. Use {user}, {answer}, or {time} where applicable."""
         pass
+
+    @guessset_msg.command(name="open")
+    async def guessset_msg_open(self, ctx, *, text: str):
+        """Update the message sent when a session opens."""
+        await self.config.guild(ctx.guild).msg_open.set(text)
+        await ctx.send("Opening message updated.")
 
     @guessset_msg.command(name="duplicate")
     async def guessset_msg_duplicate(self, ctx, *, text: str):
@@ -302,10 +303,8 @@ class Guesses(commands.Cog):
 
         # If they aren't a booster, check if they have a cooldown applied
         if not is_booster:
-            # Determine applicable session cooldown in minutes
             cd_minutes = self.session_winner_cd if is_prev_winner else self.session_regular_cd
             
-            # Only enforce if the cooldown is greater than 0
             if cd_minutes > 0:
                 cooldown_time = datetime.timedelta(minutes=cd_minutes)
                 last_guess = self.last_guess_time.get(author.id)
