@@ -1,0 +1,11 @@
+{
+    "author": ["josh ;)"],
+    "name": "Guesses",
+    "description": "Manages a customisable #guesses channel with specific role cooldowns and probation mechanics.",
+    "disabled": false,
+    "end_user_data_statement": "This cog temporarily stores User IDs in memory to track guess cooldowns and duplicates per session. Data is cleared when a new session opens or the bot restarts.",
+    "min_bot_version": "3.5.0",
+    "requirements": [],
+    "tags": ["games", "guesses", "cooldowns", "utility"]
+}
+
