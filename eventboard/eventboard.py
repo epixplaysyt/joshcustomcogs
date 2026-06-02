@@ -15,11 +15,11 @@ class EventBoard(commands.Cog):
         self.config = Config.get_conf(self, identifier=8374629104, force_registration=True)
         
         default_guild = {
-            "api_url": "https://instance.planetaryapp.cloud/api/v1/sessions",
+            "api_url": "https://instance.planetaryapp.cloud/api/public/v1/workspace/YOUR_ID/sessions/upcoming?limit=50&page=1",
             "api_token": "",
             "channel_id": None,
             "message_id": None,
-            "embed_color": 0x2596be,  # Matches your custom hex #2596be
+            "embed_color": 0x2596be,  # Custom hex #2596be
         }
         self.config.register_guild(**default_guild)
         self.update_board_loop.start()
@@ -44,8 +44,8 @@ class EventBoard(commands.Cog):
         
         if not channel_id:
             return False, "Configuration Error: Destination channel has not been set yet via `!eventset channel`."
-        if not api_url or "instance.planetaryapp.cloud" in api_url:
-            return False, "Configuration Error: API URL has not been configured or is still set to the default placeholder."
+        if not api_url or "YOUR_ID" in api_url:
+            return False, "Configuration Error: Please configure your active workspace URL endpoint via `!eventset url`."
             
         channel = guild.get_channel(channel_id)
         if not channel:
@@ -59,7 +59,6 @@ class EventBoard(commands.Cog):
         headers = {}
         if api_token:
             headers["Authorization"] = f"Bearer {api_token}"
-            headers["X-API-Key"] = api_token
 
         async with aiohttp.ClientSession() as session:
             try:
@@ -75,20 +74,40 @@ class EventBoard(commands.Cog):
                 return False, f"Exception Error encountered while fetching data: {str(e)}"
 
         upcoming_events = []
-        items_source = sessions_data.get("data", sessions_data) if isinstance(sessions_data, dict) else sessions_data
+        sessions_list = sessions_data.get("sessions", [])
         
-        if isinstance(items_source, list):
-            for item in items_source:
-                category = item.get("category", "")
+        if isinstance(sessions_list, list):
+            for item in sessions_list:
+                # Skip historical sessions that successfully ended to avoid cluttering the billboard
+                if item.get("ended") is True and not item.get("cancelled"):
+                    continue
+                
+                # Fetch nested category safely
+                session_type = item.get("type") or {}
+                category = session_type.get("category", "")
+                
                 if category and str(category).lower() == "events":
                     upcoming_events.append(item)
 
         events_text = ""
         if upcoming_events:
             for event in upcoming_events[:8]:
-                name = event.get("name") or event.get("title") or "Unnamed Event"
-                time_val = event.get("scheduledTime") or event.get("time") or event.get("date")
+                name = event.get("name") or "Unnamed Event"
+                time_val = event.get("date")
                 
+                is_cancelled = event.get("cancelled") is True
+                started_at = event.get("startedAt")
+                is_ongoing = started_at is not None and event.get("ended") is not True and not is_cancelled
+
+                # Build out Title Headers based on Status Requirements
+                if is_cancelled:
+                    title_display = f"~~**{name}**~~ ❌ *(Cancelled)*"
+                elif is_ongoing:
+                    title_display = f"**{name}** 🟢 *(Ongoing)*"
+                else:
+                    title_display = f"**{name}** ⏳ *(Upcoming)*"
+
+                # Parse ISO-8601 strings into Discord Dynamic Timestamps
                 if time_val:
                     try:
                         if "T" in str(time_val):
@@ -100,9 +119,24 @@ class EventBoard(commands.Cog):
                         time_str = str(time_val)
                 else:
                     time_str = "TBD"
-                    
-                host = event.get("host") or event.get("hostName") or "Staff"
-                events_text += f"• **{name}**\n📅 {time_str}\n👤 Host: {host}\n\n"
+                
+                # Fetch nested host data safely
+                host_info = event.get("host") or {}
+                host = host_info.get("username") or "Staff"
+                
+                # Fetch and truncate nested description snippet safely
+                session_type = event.get("type") or {}
+                raw_desc = session_type.get("description") or event.get("description") or ""
+                raw_desc = raw_desc.strip().replace("\n", " ") # Collapse structural linebreaks for embedding cleanly
+                
+                if len(raw_desc) > 110:
+                    desc_snippet = f"\n*\"{raw_desc[:107]}...\"*"
+                elif raw_desc:
+                    desc_snippet = f"\n*\"{raw_desc}\"*"
+                else:
+                    desc_snippet = ""
+                
+                events_text += f"• {title_display}\n📅 {time_str}\n👤 Host: {host}{desc_snippet}\n\n"
         else:
             events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
 
@@ -112,13 +146,11 @@ class EventBoard(commands.Cog):
             color=discord.Color(data["embed_color"])
         )
         
-        # Description is now strictly the welcome intro string
         embed.description = (
             "Welcome to the channel for all official MM Tech Studios events! This is where we "
             "announce everything happening across the community to keep things active and fun."
         )
         
-        # Field 1: Information Guide (Separated out into its own field block)
         info_field_value = (
             "• Game Nights & Showcases. Join the community to play games together or check out "
             "what our developers and members are building.\n"
@@ -127,8 +159,6 @@ class EventBoard(commands.Cog):
             "participate in upcoming activities."
         )
         embed.add_field(name="What will you find here?", value=info_field_value, inline=False)
-        
-        # Field 2: Dynamic Live Schedule Target
         embed.add_field(name="🗓️ Upcoming Schedule", value=events_text, inline=False)
         
         avatar_url = guild.icon.url if guild.icon else None
@@ -148,14 +178,14 @@ class EventBoard(commands.Cog):
         if msg:
             try:
                 await msg.edit(embed=embed)
-                return True, "Board updated successfully via message edit."
+                return True, f"Board updated smoothly (Found {len(upcoming_events)} live index tracking targets)."
             except Exception as e:
                 return False, f"Discord Write Error: Failed to edit existing message: {str(e)}"
         else:
             try:
                 new_msg = await channel.send(embed=embed)
                 await self.config.guild(guild).message_id.set(new_msg.id)
-                return True, "Board created successfully via new message channel dispatch."
+                return True, f"Board spawned fresh (Found {len(upcoming_events)} live index tracking targets)."
             except Exception as e:
                 return False, f"Discord Write Error: Failed to send new message embed: {str(e)}"
 
@@ -178,9 +208,9 @@ class EventBoard(commands.Cog):
 
     @eventset.command(name="url")
     async def eventset_url(self, ctx, url: str):
-        """Define the Orbit sessions endpoint URL."""
+        """Define the Orbit sessions endpoint URL (include your workspace workspace ID block)."""
         await self.config.guild(ctx.guild).api_url.set(url)
-        await ctx.send(f"✅ Orbit endpoint targeting synchronized to: `{url}`")
+        await ctx.send(f"✅ Orbit endpoint targeting synchronized to:\n`{url}`")
 
     @eventset.command(name="token")
     async def eventset_token(self, ctx, token: str):
@@ -192,7 +222,7 @@ class EventBoard(commands.Cog):
         except discord.Forbidden:
             await ctx.send("✅ Orbit API configuration payload processed.")
 
-    @eventset.command(name="color")
+    @commands.command(name="color")
     async def eventset_color(self, ctx, color: discord.Color):
         """Change the left border highlight color of the embed board."""
         await self.config.guild(ctx.guild).embed_color.set(color.value)
