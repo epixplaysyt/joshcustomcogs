@@ -138,11 +138,11 @@ class EventBoard(commands.Cog):
         else:
             events_text = "*No upcoming community events scheduled at the moment. Check back soon!*\n\n"
 
-        # CHANGED: Calculate current execution runtime and append to the schedule field string block in italics
+        # CHANGED: Now appends strictly the relative layout format string token ("5 minutes ago")
         now_ts = int(datetime.now(timezone.utc).timestamp())
-        events_text += f"*Last updated: <t:{now_ts}:F> (<t:{now_ts}:R>)*"
+        events_text += f"*Last updated: <t:{now_ts}:R>*"
 
-        # Base Embed Setup (Removed root-level timestamp property metadata)
+        # Base Embed Setup
         embed = discord.Embed(
             title="📅 Events",
             color=discord.Color(data["embed_color"])
