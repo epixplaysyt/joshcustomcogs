@@ -29,7 +29,7 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=1)
     async def update_board_loop(self):
         await self.bot.wait_until_ready()
         for guild_id in await self.config.all_guilds():
