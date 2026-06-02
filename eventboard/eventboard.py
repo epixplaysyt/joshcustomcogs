@@ -77,14 +77,15 @@ class EventBoard(commands.Cog):
         
         if isinstance(sessions_list, list):
             for item in sessions_list:
-                # Explicit filtering logic
+                # Keep cancelled items, skip historically ended items
                 if item.get("ended") is True and not item.get("cancelled"):
                     continue
                 
                 session_type = item.get("type") or {}
                 category = session_type.get("category", "")
                 
-                if category and str(category).lower() == "events":
+                # FIXED: Matches both "event" and "events"
+                if category and str(category).lower() in ["event", "events"]:
                     upcoming_events.append(item)
 
         events_text = ""
@@ -93,10 +94,15 @@ class EventBoard(commands.Cog):
                 name = event.get("name") or "Unnamed Event"
                 time_val = event.get("date")
                 
-                is_cancelled = event.get("cancelled") is True
-                started_at = event.get("startedAt")
-                # If startedAt exists and it hasn't ended or been cancelled, it's ongoing
-                is_ongoing = started_at is not None and event.get("ended") is not True and not is_cancelled
+                # Dynamic Status Calculations
+                status_str = str(event.get("status", "")).lower()
+                is_cancelled = event.get("cancelled") is True or status_str == "cancelled"
+                
+                # Event is ongoing if status explicitly says so, or if it has started but not ended
+                is_ongoing = (
+                    status_str in ["ongoing", "live", "active"] or 
+                    (event.get("startedAt") is not None and event.get("ended") is not True and not is_cancelled)
+                )
 
                 if is_cancelled:
                     title_display = f"~~**{name}**~~ ❌ *(Cancelled)*"
@@ -108,7 +114,9 @@ class EventBoard(commands.Cog):
                 if time_val:
                     try:
                         if "T" in str(time_val):
-                            dt = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+                            # Cleans up sub-millisecond ISO timestamp strings cleanly
+                            clean_time = str(time_val).replace("Z", "+00:00")
+                            dt = datetime.fromisoformat(clean_time)
                             time_str = f"<t:{int(dt.timestamp())}:F> (<t:{int(dt.timestamp())}:R>)"
                         else:
                             time_str = str(time_val)
@@ -257,11 +265,9 @@ class EventBoard(commands.Cog):
                     except Exception:
                         formatted_json = raw_text
                     
-                    # If it fits inside a single Discord message block, send directly
                     if len(formatted_json) < 1950:
                         await ctx.send(f"🛰️ **Raw API Response Data:**\n```json\n{formatted_json}\n```")
                     else:
-                        # Otherwise, package it up cleanly into an attached text document
                         data_stream = io.BytesIO(formatted_json.encode("utf-8"))
                         discord_file = discord.File(data_stream, filename="orbit_debug_dump.json")
                         await ctx.send("🛰️ **Raw API Response Data (Too large for chat, sent as file):**", file=discord_file)
