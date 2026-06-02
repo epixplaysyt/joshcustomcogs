@@ -1,0 +1,10 @@
+{
+    "author": ["josh"],
+    "name": "EventBoard",
+    "description": "Periodically calls Orbit API structures to populate a beautiful community schedules panel dashboard.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not track or log user records. It retains the guild structural settings and channel pointer references exclusively.",
+    "min_bot_version": "3.5.0",
+    "requirements": ["aiohttp"],
+    "tags": ["roblox", "orbit", "events", "embed"]
+}
