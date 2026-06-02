@@ -19,7 +19,7 @@ class EventBoard(commands.Cog):
             "api_token": "",
             "channel_id": None,
             "message_id": None,
-            "embed_color": 0x2596be,
+            "embed_color": 0x2596be,  # Matches your custom hex #2596be
         }
         self.config.register_guild(**default_guild)
         self.update_board_loop.start()
@@ -64,7 +64,7 @@ class EventBoard(commands.Cog):
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(api_url, headers=headers, timeout=10) as response:
-                    if response.status == 401 or response.status == 403:
+                    if response.status in (401, 403):
                         return False, f"API Error: Unauthorized (Status {response.status}). Check if your token is valid."
                     if response.status != 200:
                         return False, f"API Error: Received unexpected status code {response.status} from Orbit server."
@@ -106,22 +106,29 @@ class EventBoard(commands.Cog):
         else:
             events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
 
+        # Base Embed Setup
         embed = discord.Embed(
             title="📅 Events",
             color=discord.Color(data["embed_color"])
         )
         
+        # Description is now strictly the welcome intro string
         embed.description = (
             "Welcome to the channel for all official MM Tech Studios events! This is where we "
-            "announce everything happening across the community to keep things active and fun.\n\n"
-            "**What will you find here?**\n\n"
+            "announce everything happening across the community to keep things active and fun."
+        )
+        
+        # Field 1: Information Guide (Separated out into its own field block)
+        info_field_value = (
             "• Game Nights & Showcases. Join the community to play games together or check out "
             "what our developers and members are building.\n"
             "• Community Q&As. Get live updates on our projects and ask the team your questions.\n"
             "• Schedules & Details. Find exact dates, times, and instructions on how to "
             "participate in upcoming activities."
         )
+        embed.add_field(name="What will you find here?", value=info_field_value, inline=False)
         
+        # Field 2: Dynamic Live Schedule Target
         embed.add_field(name="🗓️ Upcoming Schedule", value=events_text, inline=False)
         
         avatar_url = guild.icon.url if guild.icon else None
