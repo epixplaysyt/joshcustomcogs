@@ -5,7 +5,7 @@ from discord.ext import tasks
 import logging
 import json
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger("red.eventboard")
 
@@ -29,7 +29,7 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=5)
     async def update_board_loop(self):
         await self.bot.wait_until_ready()
         for guild_id in await self.config.all_guilds():
@@ -75,15 +75,24 @@ class EventBoard(commands.Cog):
         upcoming_events = []
         sessions_list = sessions_data.get("sessions", [])
         
+        now = datetime.now(timezone.utc)
+
         if isinstance(sessions_list, list):
             for item in sessions_list:
-                if item.get("ended") is True and not item.get("cancelled"):
-                    continue
-                
                 session_type = item.get("type") or {}
                 category = session_type.get("category", "")
                 
                 if category and str(category).lower() in ["event", "events"]:
+                    # FIXED: Filter out events older than 12 hours based on end time or scheduled date
+                    ref_time_str = item.get("ended") or item.get("date")
+                    if ref_time_str:
+                        try:
+                            ref_dt = datetime.fromisoformat(str(ref_time_str).replace("Z", "+00:00"))
+                            if (now - ref_dt) > timedelta(hours=12):
+                                continue  # Skip events older than 12 hours
+                        except Exception:
+                            pass
+                            
                     upcoming_events.append(item)
 
         events_text = ""
@@ -95,13 +104,16 @@ class EventBoard(commands.Cog):
                 status_str = str(event.get("status", "")).lower()
                 is_cancelled = event.get("cancelled") is True or status_str == "cancelled"
                 
-                is_ongoing = (
-                    status_str in ["ongoing", "live", "active"] or 
-                    (event.get("startedAt") is not None and event.get("ended") is not True and not is_cancelled)
+                # FIXED: Comprehensive evaluation for Completed vs Ongoing vs Upcoming states
+                is_completed = (event.get("ended") is not None or status_str == "ended") and not is_cancelled
+                is_ongoing = not is_completed and not is_cancelled and (
+                    status_str in ["ongoing", "live", "active"] or event.get("startedAt") is not None
                 )
 
                 if is_cancelled:
                     title_display = f"~~**{name}**~~ ❌ *(Cancelled)*"
+                elif is_completed:
+                    title_display = f"**{name}** ✅ *(Completed)*"
                 elif is_ongoing:
                     title_display = f"**{name}** 🟢 *(Ongoing)*"
                 else:
@@ -127,22 +139,29 @@ class EventBoard(commands.Cog):
                 raw_desc = session_type.get("description") or event.get("description") or ""
                 raw_desc = raw_desc.strip().replace("\n", " ")
                 
-                if len(raw_desc) > 110:
-                    desc_snippet = f"\n*\"{raw_desc[:107]}...\"*"
-                elif raw_desc:
-                    desc_snippet = f"\n*\"{raw_desc}\"*"
+                # FIXED: Max 2 lines/ultra-short format constraint for completed or cancelled histories
+                if is_completed or is_cancelled:
+                    if len(raw_desc) > 60:
+                        desc_snippet = f"\n*\"{raw_desc[:57]}...\"*"
+                    elif raw_desc:
+                        desc_snippet = f"\n*\"{raw_desc}\"*"
+                    else:
+                        desc_snippet = ""
                 else:
-                    desc_snippet = ""
+                    if len(raw_desc) > 110:
+                        desc_snippet = f"\n*\"{raw_desc[:107]}...\"*"
+                    elif raw_desc:
+                        desc_snippet = f"\n*\"{raw_desc}\"*"
+                    else:
+                        desc_snippet = ""
                 
                 events_text += f"• {title_display}\n📅 {time_str}\n👤 Host: {host}{desc_snippet}\n\n"
         else:
             events_text = "*No upcoming community events scheduled at the moment. Check back soon!*\n\n"
 
-        # CHANGED: Now appends strictly the relative layout format string token ("5 minutes ago")
-        now_ts = int(datetime.now(timezone.utc).timestamp())
+        now_ts = int(now.timestamp())
         events_text += f"*Last updated: <t:{now_ts}:R>*"
 
-        # Base Embed Setup
         embed = discord.Embed(
             title="📅 Events",
             color=discord.Color(data["embed_color"])
