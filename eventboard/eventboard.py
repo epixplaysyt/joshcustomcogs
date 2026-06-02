@@ -5,7 +5,7 @@ from discord.ext import tasks
 import logging
 import json
 import io
-from datetime import datetime, timezone  # Added timezone import for accurate embed timestamps
+from datetime import datetime, timezone
 
 log = logging.getLogger("red.eventboard")
 
@@ -29,7 +29,7 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    @tasks.loop(minutes=5)  # CHANGED: Automated loop frequency increased from 10 to 5 minutes
+    @tasks.loop(minutes=5)
     async def update_board_loop(self):
         await self.bot.wait_until_ready()
         for guild_id in await self.config.all_guilds():
@@ -136,13 +136,16 @@ class EventBoard(commands.Cog):
                 
                 events_text += f"• {title_display}\n📅 {time_str}\n👤 Host: {host}{desc_snippet}\n\n"
         else:
-            events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
+            events_text = "*No upcoming community events scheduled at the moment. Check back soon!*\n\n"
 
-        # Base Embed Setup
+        # CHANGED: Calculate current execution runtime and append to the schedule field string block in italics
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        events_text += f"*Last updated: <t:{now_ts}:F> (<t:{now_ts}:R>)*"
+
+        # Base Embed Setup (Removed root-level timestamp property metadata)
         embed = discord.Embed(
             title="📅 Events",
-            color=discord.Color(data["embed_color"]),
-            timestamp=datetime.now(timezone.utc)  # ADDED: Embed internal timestamp showing when it was rendered
+            color=discord.Color(data["embed_color"])
         )
         
         embed.description = (
@@ -162,7 +165,7 @@ class EventBoard(commands.Cog):
         
         avatar_url = guild.icon.url if guild.icon else None
         embed.set_footer(
-            text="Last Updated • Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
+            text="Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
             icon_url=avatar_url
         )
         
