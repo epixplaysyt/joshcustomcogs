@@ -5,7 +5,7 @@ from discord.ext import tasks
 import logging
 import json
 import io
-from datetime import datetime
+from datetime import datetime, timezone  # Added timezone import for accurate embed timestamps
 
 log = logging.getLogger("red.eventboard")
 
@@ -29,7 +29,7 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=5)  # CHANGED: Automated loop frequency increased from 10 to 5 minutes
     async def update_board_loop(self):
         await self.bot.wait_until_ready()
         for guild_id in await self.config.all_guilds():
@@ -77,14 +77,12 @@ class EventBoard(commands.Cog):
         
         if isinstance(sessions_list, list):
             for item in sessions_list:
-                # Keep cancelled items, skip historically ended items
                 if item.get("ended") is True and not item.get("cancelled"):
                     continue
                 
                 session_type = item.get("type") or {}
                 category = session_type.get("category", "")
                 
-                # FIXED: Matches both "event" and "events"
                 if category and str(category).lower() in ["event", "events"]:
                     upcoming_events.append(item)
 
@@ -94,11 +92,9 @@ class EventBoard(commands.Cog):
                 name = event.get("name") or "Unnamed Event"
                 time_val = event.get("date")
                 
-                # Dynamic Status Calculations
                 status_str = str(event.get("status", "")).lower()
                 is_cancelled = event.get("cancelled") is True or status_str == "cancelled"
                 
-                # Event is ongoing if status explicitly says so, or if it has started but not ended
                 is_ongoing = (
                     status_str in ["ongoing", "live", "active"] or 
                     (event.get("startedAt") is not None and event.get("ended") is not True and not is_cancelled)
@@ -114,7 +110,6 @@ class EventBoard(commands.Cog):
                 if time_val:
                     try:
                         if "T" in str(time_val):
-                            # Cleans up sub-millisecond ISO timestamp strings cleanly
                             clean_time = str(time_val).replace("Z", "+00:00")
                             dt = datetime.fromisoformat(clean_time)
                             time_str = f"<t:{int(dt.timestamp())}:F> (<t:{int(dt.timestamp())}:R>)"
@@ -143,9 +138,11 @@ class EventBoard(commands.Cog):
         else:
             events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
 
+        # Base Embed Setup
         embed = discord.Embed(
             title="📅 Events",
-            color=discord.Color(data["embed_color"])
+            color=discord.Color(data["embed_color"]),
+            timestamp=datetime.now(timezone.utc)  # ADDED: Embed internal timestamp showing when it was rendered
         )
         
         embed.description = (
@@ -165,7 +162,7 @@ class EventBoard(commands.Cog):
         
         avatar_url = guild.icon.url if guild.icon else None
         embed.set_footer(
-            text="Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
+            text="Last Updated • Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
             icon_url=avatar_url
         )
         
