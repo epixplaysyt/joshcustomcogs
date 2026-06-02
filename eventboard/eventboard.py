@@ -30,128 +30,132 @@ class EventBoard(commands.Cog):
     @tasks.loop(minutes=10)
     async def update_board_loop(self):
         await self.bot.wait_until_ready()
-        await self._run_board_update()
+        for guild_id in await self.config.all_guilds():
+            guild = self.bot.get_guild(guild_id)
+            if guild:
+                await self._run_board_update(guild)
 
-    async def _run_board_update(self, target_guild: discord.Guild = None):
-        """Internal helper to process the API request and update the embed message."""
-        all_guilds = await self.config.all_guilds()
+    async def _run_board_update(self, guild: discord.Guild) -> tuple[bool, str]:
+        """Internal helper to process the API request. Returns (success_bool, status_message)"""
+        data = await self.config.guild(guild).all()
+        channel_id = data["channel_id"]
+        api_url = data["api_url"]
+        api_token = data["api_token"]
         
+        if not channel_id:
+            return False, "Configuration Error: Destination channel has not been set yet via `!eventset channel`."
+        if not api_url or "instance.planetaryapp.cloud" in api_url:
+            return False, "Configuration Error: API URL has not been configured or is still set to the default placeholder."
+            
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            return False, f"Discord Error: Cannot find configured channel ID ({channel_id}) in this server."
+        
+        # Verify Bot Permissions
+        perms = channel.permissions_for(guild.me)
+        if not perms.send_messages or not perms.embed_links:
+            return False, f"Permission Error: Bot is missing 'Send Messages' or 'Embed Links' in {channel.mention}."
+
+        headers = {}
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+            headers["X-API-Key"] = api_token
+
         async with aiohttp.ClientSession() as session:
-            for guild_id, data in all_guilds.items():
-                # If target_guild is passed, skip other servers running the loop
-                if target_guild and guild_id != target_guild.id:
-                    continue
-                    
-                guild = self.bot.get_guild(guild_id)
-                if not guild:
-                    continue
-                
-                channel_id = data["channel_id"]
-                api_url = data["api_url"]
-                api_token = data["api_token"]
-                
-                if not channel_id or not api_url:
-                    continue
-                    
-                channel = guild.get_channel(channel_id)
-                if not channel:
-                    continue
-                
-                headers = {}
-                if api_token:
-                    headers["Authorization"] = f"Bearer {api_token}"
-                    headers["X-API-Key"] = api_token  # Handles common variants of Orbit deployment structures
+            try:
+                async with session.get(api_url, headers=headers, timeout=10) as response:
+                    if response.status == 401 or response.status == 403:
+                        return False, f"API Error: Unauthorized (Status {response.status}). Check if your token is valid."
+                    if response.status != 200:
+                        return False, f"API Error: Received unexpected status code {response.status} from Orbit server."
+                    sessions_data = await response.json()
+            except aiohttp.ClientConnectorError:
+                return False, f"Connection Error: Could not resolve or connect to the API URL: `{api_url}`"
+            except Exception as e:
+                return False, f"Exception Error encountered while fetching data: {str(e)}"
 
-                try:
-                    async with session.get(api_url, headers=headers, timeout=10) as response:
-                        if response.status != 200:
-                            log.error(f"Failed to fetch Orbit sessions for guild {guild_id}. Status: {response.status}")
-                            continue
-                        sessions_data = await response.json()
-                except Exception as e:
-                    log.error(f"Error connecting to Orbit API for guild {guild_id}: {e}")
-                    continue
+        upcoming_events = []
+        items_source = sessions_data.get("data", sessions_data) if isinstance(sessions_data, dict) else sessions_data
+        
+        if isinstance(items_source, list):
+            for item in items_source:
+                category = item.get("category", "")
+                if category and str(category).lower() == "events":
+                    upcoming_events.append(item)
 
-                # Filter down to entries explicitly categorized as "events"
-                upcoming_events = []
-                items_source = sessions_data.get("data", sessions_data) if isinstance(sessions_data, dict) else sessions_data
+        events_text = ""
+        if upcoming_events:
+            for event in upcoming_events[:8]:
+                name = event.get("name") or event.get("title") or "Unnamed Event"
+                time_val = event.get("scheduledTime") or event.get("time") or event.get("date")
                 
-                if isinstance(items_source, list):
-                    for item in items_source:
-                        category = item.get("category", "")
-                        if category and str(category).lower() == "events":
-                            upcoming_events.append(item)
-
-                # Format upcoming events section safely
-                events_text = ""
-                if upcoming_events:
-                    for event in upcoming_events[:8]:  # Capped at 8 listings to protect embed limits safely
-                        name = event.get("name") or event.get("title") or "Unnamed Event"
-                        time_val = event.get("scheduledTime") or event.get("time") or event.get("date")
-                        
-                        if time_val:
-                            try:
-                                if "T" in str(time_val):
-                                    dt = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
-                                    time_str = f"<t:{int(dt.timestamp())}:F> (<t:{int(dt.timestamp())}:R>)"
-                                else:
-                                    time_str = str(time_val)
-                            except Exception:
-                                time_str = str(time_val)
+                if time_val:
+                    try:
+                        if "T" in str(time_val):
+                            dt = datetime.fromisoformat(str(time_val).replace("Z", "+00:00"))
+                            time_str = f"<t:{int(dt.timestamp())}:F> (<t:{int(dt.timestamp())}:R>)"
                         else:
-                            time_str = "TBD"
-                            
-                        host = event.get("host") or event.get("hostName") or "Staff"
-                        events_text += f"• **{name}**\n📅 {time_str}\n👤 Host: {host}\n\n"
+                            time_str = str(time_val)
+                    except Exception:
+                        time_str = str(time_val)
                 else:
-                    events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
+                    time_str = "TBD"
+                    
+                host = event.get("host") or event.get("hostName") or "Staff"
+                events_text += f"• **{name}**\n📅 {time_str}\n👤 Host: {host}\n\n"
+        else:
+            events_text = "*No upcoming community events scheduled at the moment. Check back soon!*"
 
-                # Build the mirrored embed style based on UI design specification
-                embed = discord.Embed(
-                    title="📅 Events",
-                    color=discord.Color(data["embed_color"])
-                )
-                
-                embed.description = (
-                    "Welcome to the channel for all official MM Tech Studios events! This is where we "
-                    "announce everything happening across the community to keep things active and fun.\n\n"
-                    "**What will you find here?**\n\n"
-                    "• Game Nights & Showcases. Join the community to play games together or check out "
-                    "what our developers and members are building.\n"
-                    "• Community Q&As. Get live updates on our projects and ask the team your questions.\n"
-                    "• Schedules & Details. Find exact dates, times, and instructions on how to "
-                    "participate in upcoming activities."
-                )
-                
-                embed.add_field(name="🗓️ Upcoming Schedule", value=events_text, inline=False)
-                
-                avatar_url = guild.icon.url if guild.icon else None
-                embed.set_footer(
-                    text="Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
-                    icon_url=avatar_url
-                )
-                
-                # Verify message presence state to perform edit operations rather than messy repeating posts
-                message_id = data["message_id"]
+        embed = discord.Embed(
+            title="📅 Events",
+            color=discord.Color(data["embed_color"])
+        )
+        
+        embed.description = (
+            "Welcome to the channel for all official MM Tech Studios events! This is where we "
+            "announce everything happening across the community to keep things active and fun.\n\n"
+            "**What will you find here?**\n\n"
+            "• Game Nights & Showcases. Join the community to play games together or check out "
+            "what our developers and members are building.\n"
+            "• Community Q&As. Get live updates on our projects and ask the team your questions.\n"
+            "• Schedules & Details. Find exact dates, times, and instructions on how to "
+            "participate in upcoming activities."
+        )
+        
+        embed.add_field(name="🗓️ Upcoming Schedule", value=events_text, inline=False)
+        
+        avatar_url = guild.icon.url if guild.icon else None
+        embed.set_footer(
+            text="Copyright © MM Tech Studios:\nhttps://discord.com/invite/DVaRQRQRcB",
+            icon_url=avatar_url
+        )
+        
+        message_id = data["message_id"]
+        msg = None
+        if message_id:
+            try:
+                msg = await channel.fetch_message(message_id)
+            except (discord.NotFound, discord.Forbidden):
                 msg = None
-                if message_id:
-                    try:
-                        msg = await channel.fetch_message(message_id)
-                    except (discord.NotFound, discord.Forbidden):
-                        msg = None
-                
-                if msg:
-                    try:
-                        await msg.edit(embed=embed)
-                    except Exception as e:
-                        log.error(f"Failed to edit event board message: {e}")
-                else:
-                    try:
-                        new_msg = await channel.send(embed=embed)
-                        await self.config.guild(guild).message_id.set(new_msg.id)
-                    except Exception as e:
-                        log.error(f"Failed to send new event board message: {e}")
-                      
+        
+        if msg:
+            try:
+                await msg.edit(embed=embed)
+                return True, "Board updated successfully via message edit."
+            except Exception as e:
+                return False, f"Discord Write Error: Failed to edit existing message: {str(e)}"
+        else:
+            try:
+                new_msg = await channel.send(embed=embed)
+                await self.config.guild(guild).message_id.set(new_msg.id)
+                return True, "Board created successfully via new message channel dispatch."
+            except Exception as e:
+                return False, f"Discord Write Error: Failed to send new message embed: {str(e)}"
+
+    # ========================
+    # PREFIX ADMIN COMMANDS
+    # ========================
+
     @commands.group(name="eventset")
     @commands.admin_or_permissions(manage_guild=True)
     async def eventset(self, ctx):
@@ -162,8 +166,8 @@ class EventBoard(commands.Cog):
     async def eventset_channel(self, ctx, channel: discord.TextChannel):
         """Configure the destination target text channel for message rendering updates."""
         await self.config.guild(ctx.guild).channel_id.set(channel.id)
-        await self.config.guild(ctx.guild).message_id.set(None)  # Resets message ID to force generate a fresh embed post
-        await ctx.send(f"✅ Event board channel set to {channel.mention}. The new embed will build momentarily.")
+        await self.config.guild(ctx.guild).message_id.set(None)
+        await ctx.send(f"✅ Event board channel set to {channel.mention}. Use `!eventset refresh` to test it.")
 
     @eventset.command(name="url")
     async def eventset_url(self, ctx, url: str):
@@ -179,11 +183,23 @@ class EventBoard(commands.Cog):
             await ctx.message.delete()
             await ctx.send("✅ Orbit API configuration payload processed. (Command deleted to secure tokens).")
         except discord.Forbidden:
-            await ctx.send("✅ Orbit API configuration payload processed. (Please erase your plaintext configuration command history manually for safety).")
+            await ctx.send("✅ Orbit API configuration payload processed.")
+
+    @eventset.command(name="color")
+    async def eventset_color(self, ctx, color: discord.Color):
+        """Change the left border highlight color of the embed board."""
+        await self.config.guild(ctx.guild).embed_color.set(color.value)
+        await ctx.send(f"✅ Embed sidebar accent color updated to: `{color.value}`.")
 
     @eventset.command(name="refresh")
     async def eventset_refresh(self, ctx):
         """Force run an explicit pull against the web targets to sync content state instantly."""
         await ctx.typing()
-        await self._run_board_update(target_guild=ctx.guild)
-        await ctx.send("🔄 Event board sync complete.")
+        success, status_msg = await self._run_board_update(ctx.guild)
+        if success:
+            await ctx.send(f"🔄 **Sync Complete:** {status_msg}")
+        else:
+            await ctx.send(f"❌ **Sync Failed!**\n> {status_msg}")
+
+async def setup(bot):
+    await bot.add_cog(EventBoard(bot))
