@@ -5,7 +5,7 @@ import io
 import datetime
 
 class TicketConfirmationView(discord.ui.View):
-    """Dynamic confirmation interface presenting department choices to the user."""
+    """Confirmation menu showing department choices to the user."""
     def __init__(self, cog, user: discord.User, guild: discord.Guild, initial_message: discord.Message, departments: dict):
         super().__init__(timeout=120)
         self.cog = cog
@@ -14,7 +14,7 @@ class TicketConfirmationView(discord.ui.View):
         self.initial_message = initial_message
         self.message = None
 
-        # Generate a green selection button for each active registration department
+        # Create a button for each active department
         for dept_name in departments.keys():
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
@@ -24,7 +24,7 @@ class TicketConfirmationView(discord.ui.View):
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
             
-        # Standard safety exit option
+        # Cancel button
         cancel_button = discord.ui.Button(label="Cancel", style=discord.Style.red, custom_id="cancel_ticket")
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
@@ -35,7 +35,7 @@ class TicketConfirmationView(discord.ui.View):
             self.cog.pending_confirmations.discard(self.user.id)
             self.stop()
             
-            # Execute channel infrastructure build
+            # Create the ticket channel
             channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
             if channel:
                 member = self.guild.get_member(self.user.id)
@@ -66,13 +66,13 @@ class TicketConfirmationView(discord.ui.View):
         self.cog.pending_confirmations.discard(self.user.id)
         try:
             if self.message:
-                await self.message.edit(content="⏳ Ticket creation confirmation timed out.", view=None)
+                await self.message.edit(content="⏳ Ticket creation timed out.", view=None)
         except Exception:
             pass
 
 
 class Modmail(commands.Cog):
-    """Single-server Modmail engine with confirmation routing, role footprint tracking, and alpha ID tracking."""
+    """Modmail system with department choices, role tracking, and ticket IDs."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -90,7 +90,7 @@ class Modmail(commands.Cog):
         self.config.register_channel(owner_id=None, claimed_by=None, ticket_id=None)
 
     async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general"):
-        """Compiles structural ticket environments and formats system identifiers."""
+        """Creates the ticket channel and sets up tracking."""
         departments = await self.config.guild(guild).departments()
         if department not in departments:
             department = "general"
@@ -98,7 +98,7 @@ class Modmail(commands.Cog):
         category_id = departments.get(department)
         category = guild.get_channel(category_id) if category_id else None
 
-        # Build Unique Serial Identifier Sequence (e.g. G1001)
+        # Generate ticket ID (e.g., G1001)
         counter = await self.config.guild(guild).ticket_counter() + 1
         await self.config.guild(guild).ticket_counter.set(counter)
         prefix = department[0].upper() if department else "G"
@@ -115,11 +115,11 @@ class Modmail(commands.Cog):
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
         
         embed = discord.Embed(
-            title=f"🎫 Ticket Created — {ticket_id}",
-            description=f"Support channel instantiated for {user.mention} (`{user.id}`).\n\n"
+            title=f"🎫 Ticket Created - {ticket_id}",
+            description=f"Support channel created for {user.mention} (`{user.id}`).\n\n"
                         f"**Ticket ID:** `{ticket_id}`\n"
                         f"**Account Created:** {created_at}\n\n"
-                        f"Type directly here to reply, or use `!anon ` to send anonymous messages.",
+                        f"Type here to reply, or use `!anon ` to send anonymous messages.",
             color=discord.Color.green(),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -130,15 +130,15 @@ class Modmail(commands.Cog):
         try:
             await user.send(
                 f"✅ **Ticket Opened ({ticket_id})**\n"
-                f"You are connected to the **{department.title()}** branch. Please send your inquiries below."
+                f"You are connected to the **{department.title()}** department. Please send your messages below."
             )
         except discord.Forbidden:
-            await channel.send("⚠️ **Warning:** The user blocks incoming direct messaging interfaces.")
+            await channel.send("⚠️ **Warning:** The user has DMs disabled.")
 
         return channel
 
     async def _generate_html_transcript(self, channel: discord.TextChannel, owner: discord.User, closer: discord.Member, reason: str, ticket_id: str) -> discord.File:
-        """Assembles fully compliant Discord themed layouts tracking identity, absolute times, and roles."""
+        """Generates an HTML transcript of the ticket channel history."""
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -163,11 +163,11 @@ class Modmail(commands.Cog):
         <body>
             <div class="header">
                 <h1>Transcript Ticket Record: {ticket_id}</h1>
-                <p><strong>Channel Context:</strong> {channel.name}</p>
-                <p><strong>Target User:</strong> {owner.name} ({owner.id})</p>
+                <p><strong>Channel Name:</strong> {channel.name}</p>
+                <p><strong>User:</strong> {owner.name} ({owner.id})</p>
                 <p><strong>Closed By:</strong> {closer.name} ({closer.id})</p>
-                <p><strong>Closure Summary Reason:</strong> {reason}</p>
-                <p><strong>Date Compiled:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+                <p><strong>Reason:</strong> {reason}</p>
+                <p><strong>Date Saved:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
             </div>
             <div class="messages">
         """
@@ -181,23 +181,25 @@ class Modmail(commands.Cog):
             content = m.clean_content
             timestamp = m.created_at.strftime('%Y-%m-%d %I:%M %p UTC')
             role_str = ""
+            is_anon_msg = False
 
             member_obj = guild.get_member(m.author.id)
             if member_obj:
                 role_str = member_obj.top_role.name
 
-            # Extract author data through logged embeds
+            # Extract data from bot embeds
             if m.author.bot and m.embeds:
                 embed_obj = m.embeds[0]
                 if embed_obj.author and embed_obj.author.name:
                     if embed_obj.author.name.startswith("[Anonymous]"):
+                        is_anon_msg = True
                         username = embed_obj.author.name.replace("[Anonymous] ", "")
                         avatar_url = embed_obj.author.icon_url or avatar_url
                     else:
                         username = embed_obj.author.name
                         avatar_url = embed_obj.author.icon_url or avatar_url
                 
-                # Extract role info and timestamp directly out of the embed's footer signature if it exists
+                # Pull role and timestamp out of the embed footer
                 if embed_obj.footer and embed_obj.footer.text:
                     parts = [p.strip() for p in embed_obj.footer.text.split("|")]
                     for part in parts:
@@ -220,7 +222,11 @@ class Modmail(commands.Cog):
             if not content and not attachments_html:
                 continue
 
-            footer_meta = f" — {role_str}" if role_str else ""
+            # Hide the rank entirely if the message was sent anonymously
+            if is_anon_msg:
+                role_str = ""
+
+            footer_meta = f" - {role_str}" if role_str else ""
 
             html += f"""
                 <div class="message">
@@ -240,7 +246,7 @@ class Modmail(commands.Cog):
         return discord.File(transcript_file, filename=f"transcript_{ticket_id}.html")
 
     async def cog_unload(self):
-        """Removes the command structure gracefully during reload phases."""
+        """Removes the slash commands cleanly on reload."""
         try:
             self.bot.tree.remove_command(self.ticket_group.name)
         except Exception:
@@ -257,35 +263,44 @@ class Modmail(commands.Cog):
 
         if not self.bot.guilds:
             return
-        guild = self.bot.guilds[0]
+        
+        # Check guilds to find where the user is a member, default to the first guild if not found
+        guild = None
+        for g in self.bot.guilds:
+            if g.get_member(message.author.id):
+                guild = g
+                break
+        if not guild:
+            guild = self.bot.guilds[0]
 
-        # Scenario A: Inbound User DM Gateway
+        # Scenario A: Inbound User DM
         if message.guild is None:
             blocked_users = await self.config.guild(guild).blocked_users()
             if message.author.id in blocked_users:
                 return
 
             active_channel_id = await self.config.user(message.author).active_channel_id()
+            channel = guild.get_channel(active_channel_id) if active_channel_id else None
 
-            if active_channel_id:
-                channel = guild.get_channel(active_channel_id)
-                if channel:
-                    ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
-                    member = guild.get_member(message.author.id)
-                    role_name = member.top_role.name if member else "User"
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
+            if channel:
+                ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
+                member = guild.get_member(message.author.id)
+                role_name = member.top_role.name if member else "User"
+                now = datetime.datetime.now(datetime.timezone.utc)
+                date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
 
-                    files = [await a.to_file() for a in message.attachments]
-                    embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
-                    embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
-                    embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-                    
-                    await channel.send(embed=embed, files=files)
-                    await message.add_reaction("✅")
-                else:
-                    await self.config.user(message.author).active_channel_id.set(None)
+                files = [await a.to_file() for a in message.attachments]
+                embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
+                embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                
+                await channel.send(embed=embed, files=files)
+                await message.add_reaction("✅")
             else:
+                # If an active ID exists but the channel is missing, clear it and proceed to open a new one immediately
+                if active_channel_id:
+                    await self.config.user(message.author).active_channel_id.set(None)
+
                 if message.author.id in self.pending_confirmations:
                     return
 
@@ -302,8 +317,8 @@ class Modmail(commands.Cog):
                 self.pending_confirmations.add(message.author.id)
                 
                 embed = discord.Embed(
-                    title="🎟️ Establish a Support Connection?",
-                    description="Confirm your intent to reach the internal staff network by selecting your target destination branch category below.",
+                    title="🎟️ Open a Support Ticket?",
+                    description="Please choose a department below to start your ticket.",
                     color=discord.Color.gold(),
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
@@ -327,7 +342,7 @@ class Modmail(commands.Cog):
 
                 user = self.bot.get_user(owner_id)
                 if not user:
-                    return await message.channel.send("⚠️ Operational Error: Targeted user object has evaporated.")
+                    return await message.channel.send("⚠️ Error: User not found.")
 
                 ticket_id = await self.config.channel(message.channel).ticket_id() or "UNKNOWN"
                 is_anon = message.content.startswith("!anon ")
@@ -343,13 +358,15 @@ class Modmail(commands.Cog):
                     files_for_channel = [await a.to_file() for a in message.attachments]
 
                     user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
-                    user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
+                    # Do not show the rank anywhere if the message is anonymous
                     if is_anon:
                         guild_icon = guild.icon.url if guild.icon else self.bot.user.display_avatar.url
                         user_embed.set_author(name="Support Team", icon_url=guild_icon)
+                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                     else:
                         user_embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
                     await user.send(embed=user_embed, files=files_for_user)
 
@@ -357,157 +374,38 @@ class Modmail(commands.Cog):
                         await message.delete()
                         chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey(), timestamp=now)
                         chan_embed.set_author(name=f"[Anonymous] {message.author.name}", icon_url=message.author.display_avatar.url)
-                        chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                        chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                         await message.channel.send(embed=chan_embed, files=files_for_channel)
                     else:
                         await message.add_reaction("📤")
 
                 except discord.Forbidden:
-                    await message.channel.send("❌ Error: Targeted destination rejects inbound transmission flows.")
+                    await message.channel.send("❌ Error: The user has DMs disabled.")
 
     # ========================
     # SLASH CORE EXECUTIVE COMMANDS
     # ========================
 
-    ticket_group = app_commands.Group(name="modmail", description="Command suite for managing modmail ticketing operations")
+    ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets")
 
-    @ticket_group.command(name="open", description="Explicitly instantiate a standard system ticket pipeline for a specific user.")
+    @ticket_group.command(name="open", description="Open a ticket for a specific user.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_open(self, interaction: discord.Interaction, user: discord.User):
         active_channel_id = await self.config.user(user).active_channel_id()
         if active_channel_id and interaction.guild.get_channel(active_channel_id):
-            return await interaction.response.send_message(f"❌ User maintains open infrastructure: <#{active_channel_id}>", ephemeral=True)
+            return await interaction.response.send_message(f"❌ This user already has an open ticket: <#{active_channel_id}>", ephemeral=True)
 
         channel = await self._create_ticket(interaction.guild, user, "general")
-        await interaction.response.send_message(f"✅ Context pipeline established inside {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"✅ Ticket channel created in {channel.mention}", ephemeral=True)
 
-    @ticket_group.command(name="claim", description="Set channel operational status labels to signify assigned control.")
+    @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_claim(self, interaction: discord.Interaction):
         owner_id = await self.config.channel(interaction.channel).owner_id()
         if not owner_id:
-            return await interaction.response.send_message("❌ Execution context invalid: Not an active channel link.", ephemeral=True)
+            return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
         
         await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.name}")
-        await interaction.response.send_message(f"✋ **{interaction.user.mention} assumes administrative assignment processing role.**")
+        await interaction.response.send_message(f"✋ **{interaction.user.mention} is now handling this ticket.**")
 
-    @ticket_group.command(name="close", description="Deconstruct active ticket pipelines, compile system logs, and dispatch notifications.")
-    @app_commands.describe(reason="Reason details passed strictly to target user summary.")
-    @app_commands.default_permissions(manage_messages=True)
-    async def ticket_close(self, interaction: discord.Interaction, reason: str):
-        owner_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_id:
-            return await interaction.response.send_message("❌ Execution context invalid: Not an active channel link.", ephemeral=True)
-
-        await interaction.response.send_message("🔒 Initiating context deconstruction sequences...", ephemeral=True)
-        
-        ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
-        user = self.bot.get_user(owner_id)
-        owner_obj = user or discord.Object(id=owner_id)
-        owner_obj.name = user.name if user else "Offline Identity"
-
-        # Compilation phase
-        transcript_file = await self._generate_html_transcript(interaction.channel, owner_obj, interaction.user, reason, ticket_id)
-
-        log_channel_id = await self.config.guild(interaction.guild).log_channel_id()
-        log_channel = interaction.guild.get_channel(log_channel_id) if log_channel_id else None
-        
-        if log_channel:
-            date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
-            embed = discord.Embed(title=f"🔒 Archived Ticket Record — {ticket_id}", color=discord.Color.red())
-            embed.add_field(name="User", value=f"<@{owner_id}> ({owner_id})")
-            embed.add_field(name="Closed By", value=interaction.user.mention)
-            embed.add_field(name="Reason Profile", value=reason, inline=False)
-            embed.set_footer(text=f"Archive Date: {date_str}")
-            await log_channel.send(embed=embed, file=transcript_file)
-
-        if user:
-            try:
-                date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
-                user_embed = discord.Embed(
-                    title=f"🔒 Ticket Closed — {ticket_id}",
-                    description=f"Your ticket has been officially closed by: **{interaction.user.name}**.",
-                    color=discord.Color.red(),
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-                user_embed.add_field(name="Resolution Reason", value=reason, inline=False)
-                user_embed.set_footer(text=f"Date: {date_str}")
-                await user.send(embed=user_embed)
-            except discord.Forbidden:
-                pass
-        
-        await self.config.user_from_id(owner_id).active_channel_id.set(None)
-        await self.config.channel(interaction.channel).clear()
-        await interaction.channel.delete(reason=f"Modmail pipeline closure: {interaction.user.name}")
-
-    # ========================
-    # ADMIN SETUP PRESETS
-    # ========================
-
-    @commands.group(name="modmailset")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def modmailset(self, ctx):
-        """Configuration entry terminal parameters."""
-        pass
-
-    @modmailset.command(name="logchannel")
-    async def modmailset_logchannel(self, ctx, channel: discord.TextChannel):
-        """Bind file transcript payload storage destinations."""
-        await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
-        await ctx.send(f"✅ Archive pipeline targeted into {channel.mention}.")
-
-    @modmailset.command(name="block")
-    async def modmailset_block(self, ctx, user: discord.User):
-        """Restricts users from creating confirmation views."""
-        async with self.config.guild(ctx.guild).blocked_users() as blocked:
-            if user.id not in blocked:
-                blocked.append(user.id)
-                await ctx.send(f"🚫 User ID **{user.name}** dropped from configuration routing access paths.")
-            else:
-                await ctx.send("❌ Record registers matching entity state already blocked.")
-
-    @modmailset.command(name="unblock")
-    async def modmailset_unblock(self, ctx, user: discord.User):
-        """Restores a blacklisted individual's access paths."""
-        async with self.config.guild(ctx.guild).blocked_users() as blocked:
-            if user.id in blocked:
-                blocked.remove(user.id)
-                await ctx.send(f"✅ Identity data profile for **{user.name}** cleared.")
-            else:
-                await ctx.send("❌ Identity registry data lookup match failed.")
-
-    @modmailset.group(name="department")
-    async def modmailset_department(self, ctx):
-        """Map functional system category containers."""
-        pass
-
-    @modmailset_department.command(name="set")
-    async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
-        """Maps an individual system classification to a categorical parent."""
-        name = name.lower()
-        async with self.config.guild(ctx.guild).departments() as deps:
-            deps[name] = category.id
-        await ctx.send(f"✅ Managed category group **{name.title()}** attached into **{category.name}**.")
-
-    @modmailset.group(name="immune")
-    async def modmailset_immune(self, ctx):
-        """Manage organizational bypass tags."""
-        pass
-
-    @modmailset.command(name="add")
-    async def m_im_add(self, ctx, role: discord.Role):
-        async with self.config.guild(ctx.guild).immune_roles() as immune:
-            if role.id not in immune:
-                immune.append(role.id)
-                await ctx.send(f"✅ Filter arrays added immune protection exceptions for: **{role.name}**.")
-            else:
-                await ctx.send("❌ Internal array tables match duplicate profile entries.")
-
-    @modmailset.command(name="remove")
-    async def m_im_remove(self, ctx, role: discord.Role):
-        async with self.config.guild(ctx.guild).immune_roles() as immune:
-            if role.id in immune:
-                immune.remove(role.id)
-                await ctx.send(f"✅ Removed role protection attributes for: **{role.name}**.")
-            else:
-                await ctx.send("❌ No filtering attributes found for given tag group elements.")
+    @ticket_group.command(name="transfer", description="Move this ticket to another depar
