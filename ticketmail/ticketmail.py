@@ -242,51 +242,29 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
-    @commands.command(name="modmaildebug"
+    # =========================
+    # DEBUG COMMAND (ADDED FIX)
+    # =========================
+    @commands.command(name="modmaildebug")
     @commands.admin_or_permissions(manage_guild=True)
     async def modmail_debug(self, ctx, user: discord.User = None):
-       """Debug modmail configuration."""
-       if user is None:
-        user = ctx.author
-        lines = []
-        # Default guild
+        if user is None:
+            user = ctx.author
+
         default_guild_id = await self.config.default_guild_id()
-        lines.append(f"Default Guild ID: {default_guild_id}")
-        
         guild = self.bot.get_guild(default_guild_id) if default_guild_id else None
-        lines.append(f"Resolved Guild: {guild.name if guild else 'NONE'}")
-        # Bot guild list (quick sanity check)
-        lines.append("Bot Guilds: " +", ".join([f"{g.name} ({g.id})" for g in self.bot.guilds]))
-        # User state
-        active_channel_id = await self.config.user(user).active_channel_id(
-        lines.append(f"Active Channel ID: {active_channel_id}")
-        active_channel = (
-          self.bot.get_channel(active_channel_id)
-          if active_channel_id else None
-        )
-        lines.append(f"Active Channel Exists: {bool(active_channel)}")
-        
-        # Guild config checks
-        if guild:
-         departments = await self.config.guild(guild).departments()
-         blocked = await self.config.guild(guild).blocked_users()
-         immune = await self.config.guild(guild).immune_roles()
 
-         lines.append(f"Departments: {departments}")
-         lines.append(f"User Blocked: {user.id in blocked}")
-         lines.append(f"Immune Roles: {immune}")
+        active_channel_id = await self.config.user(user).active_channel_id()
+        active_channel = self.bot.get_channel(active_channel_id) if active_channel_id else None
 
-         member = guild.get_member(user.id)
-         lines.append(f"User In Server: {bool(member)}")
-        # Permissions check
-        if guild:
-         me = guild.me
-         lines.append(f"Manage Channels: {me.guild_permissions.manage_channels}")
-         lines.append(f"Send Messages: {me.guild_permissions.send_messages}")
         await ctx.send(
-         "```yaml\n" +
-         "\n".join(lines) +
-         "\n```"
+            "```yaml\n"
+            f"Default Guild ID: {default_guild_id}\n"
+            f"Resolved Guild: {guild.name if guild else 'NONE'}\n"
+            f"Active Channel ID: {active_channel_id}\n"
+            f"Active Channel Exists: {bool(active_channel)}\n"
+            f"Bot Guild Count: {len(self.bot.guilds)}\n"
+            "```"
         )
 
     @commands.Cog.listener()
