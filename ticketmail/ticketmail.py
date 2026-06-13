@@ -408,4 +408,149 @@ class Modmail(commands.Cog):
         await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.name}")
         await interaction.response.send_message(f"✋ **{interaction.user.mention} is now handling this ticket.**")
 
-    @ticket_group.command(name="transfer", description="Move this ticket to another depar
+    @ticket_group.command(name="transfer", description="Move this ticket to another department.")
+    @app_commands.describe(department="The name of the department to move this ticket to.")
+    @app_commands.default_permissions(manage_messages=True)
+    async def ticket_transfer(self, interaction: discord.Interaction, department: str):
+        owner_id = await self.config.channel(interaction.channel).owner_id()
+        if not owner_id:
+            return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
+
+        departments = await self.config.guild(interaction.guild).departments()
+        department = department.lower()
+
+        if department not in departments:
+            options = ", ".join([d.title() for d in departments.keys()])
+            return await interaction.response.send_message(f"❌ Department not found. Options: `{options}`", ephemeral=True)
+
+        category_id = departments[department]
+        category = interaction.guild.get_channel(category_id) if category_id else None
+
+        if not category:
+            return await interaction.response.send_message(f"❌ No category found for `{department.title()}`.", ephemeral=True)
+
+        await interaction.channel.edit(category=category, sync_permissions=True)
+        await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
+
+    @ticket_group.command(name="close", description="Close this ticket and save the transcript logs.")
+    @app_commands.describe(reason="The reason for closing the ticket.")
+    @app_commands.default_permissions(manage_messages=True)
+    async def ticket_close(self, interaction: discord.Interaction, reason: str):
+        owner_id = await self.config.channel(interaction.channel).owner_id()
+        if not owner_id:
+            return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
+
+        await interaction.response.send_message("🔒 Closing ticket and cleaning up...", ephemeral=True)
+        
+        ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
+        user = self.bot.get_user(owner_id)
+        owner_obj = user or discord.Object(id=owner_id)
+        owner_obj.name = user.name if user else "Offline Identity"
+
+        # Generate logs
+        transcript_file = await self._generate_html_transcript(interaction.channel, owner_obj, interaction.user, reason, ticket_id)
+
+        log_channel_id = await self.config.guild(interaction.guild).log_channel_id()
+        log_channel = interaction.guild.get_channel(log_channel_id) if log_channel_id else None
+        
+        if log_channel:
+            date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+            embed = discord.Embed(title=f"🔒 Archived Ticket Record - {ticket_id}", color=discord.Color.red())
+            embed.add_field(name="User", value=f"<@{owner_id}> ({owner_id})")
+            embed.add_field(name="Closed By", value=interaction.user.mention)
+            embed.add_field(name="Reason", value=reason, inline=False)
+            embed.set_footer(text=f"Archive Date: {date_str}")
+            await log_channel.send(embed=embed, file=transcript_file)
+
+        if user:
+            try:
+                date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+                user_embed = discord.Embed(
+                    title=f"🔒 Ticket Closed - {ticket_id}",
+                    description=f"Your ticket has been closed by **{interaction.user.name}**.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+                user_embed.add_field(name="Reason", value=reason, inline=False)
+                user_embed.set_footer(text=f"Date: {date_str}")
+                await user.send(embed=user_embed)
+            except discord.Forbidden:
+                pass
+        
+        await self.config.user_from_id(owner_id).active_channel_id.set(None)
+        await self.config.channel(interaction.channel).clear()
+        await interaction.channel.delete(reason=f"Modmail closure by {interaction.user.name}")
+
+    # ========================
+    # ADMIN SETUP PRESETS
+    # ========================
+
+    @commands.group(name="modmailset")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def modmailset(self, ctx):
+        """Configuration options for modmail."""
+        pass
+
+    @modmailset.command(name="logchannel")
+    async def modmailset_logchannel(self, ctx, channel: discord.TextChannel):
+        """Set the channel where ticket transcripts are saved."""
+        await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
+        await ctx.send(f"✅ Logs will now be saved in {channel.mention}.")
+
+    @modmailset.command(name="block")
+    async def modmailset_block(self, ctx, user: discord.User):
+        """Block a user from opening tickets."""
+        async with self.config.guild(ctx.guild).blocked_users() as blocked:
+            if user.id not in blocked:
+                blocked.append(user.id)
+                await ctx.send(f"🚫 **{user.name}** has been blocked from creating tickets.")
+            else:
+                await ctx.send("❌ That user is already blocked.")
+
+    @modmailset.command(name="unblock")
+    async def modmailset_unblock(self, ctx, user: discord.User):
+        """Unblock a user from opening tickets."""
+        async with self.config.guild(ctx.guild).blocked_users() as blocked:
+            if user.id in blocked:
+                blocked.remove(user.id)
+                await ctx.send(f"✅ **{user.name}** has been unblocked.")
+            else:
+                await ctx.send("❌ That user is not currently blocked.")
+
+    @modmailset.group(name="department")
+    async def modmailset_department(self, ctx):
+        """Manage system department choices."""
+        pass
+
+    @modmailset_department.command(name="set")
+    async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
+        """Link a department name to a specific category channel."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).departments() as deps:
+            deps[name] = category.id
+        await ctx.send(f"✅ Department **{name.title()}** is now linked to the **{category.name}** category.")
+
+    @modmailset.group(name="immune")
+    async def modmailset_immune(self, ctx):
+        """Manage roles that are immune from making tickets."""
+        pass
+
+    @modmailset.command(name="add")
+    async def m_im_add(self, ctx, role: discord.Role):
+        """Add a role to the ticket immunity list."""
+        async with self.config.guild(ctx.guild).immune_roles() as immune:
+            if role.id not in immune:
+                immune.append(role.id)
+                await ctx.send(f"✅ Members with the **{role.name}** role can no longer open tickets by sending DMs.")
+            else:
+                await ctx.send("❌ That role is already on the immune list.")
+
+    @modmailset.command(name="remove")
+    async def m_im_remove(self, ctx, role: discord.Role):
+        """Remove a role from the ticket immunity list."""
+        async with self.config.guild(ctx.guild).immune_roles() as immune:
+            if role.id in immune:
+                immune.remove(role.id)
+                await ctx.send(f"✅ Removed **{role.name}** from the immune list.")
+            else:
+                await ctx.send("❌ That role is not on the immune list.")
