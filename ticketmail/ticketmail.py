@@ -274,7 +274,7 @@ class Modmail(commands.Cog):
 
         if message.guild is None:
             ctx = await self.bot.get_context(message)
-            if ctx.valid:
+            if message.content.startswith("!"):
                 return
 
             # Global Channel Look-up (Fixes active ticket desync)
