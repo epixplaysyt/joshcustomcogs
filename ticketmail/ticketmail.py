@@ -394,4 +394,3 @@ class Modmail(commands.Cog):
     @ticket_group.command(name="close", description="Deconstruct active ticket pipelines, compile system logs, and dispatch notifications.")
     @app_commands.describe(reason="Reason details passed strictly to target user summary.")
     @app_commands.default_permissions(manage_messages=True)
-            
