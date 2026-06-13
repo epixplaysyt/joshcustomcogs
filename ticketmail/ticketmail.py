@@ -5,7 +5,6 @@ import io
 import datetime
 
 class TicketConfirmationView(discord.ui.View):
-    """Confirmation menu showing department choices to the user."""
     def __init__(self, cog, user: discord.User, guild: discord.Guild, initial_message: discord.Message, departments: dict):
         super().__init__(timeout=120)
         self.cog = cog
@@ -14,7 +13,6 @@ class TicketConfirmationView(discord.ui.View):
         self.initial_message = initial_message
         self.message = None
 
-        # Create a button for each active department
         for dept_name in departments.keys():
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
@@ -24,7 +22,6 @@ class TicketConfirmationView(discord.ui.View):
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
             
-        # Cancel button
         cancel_button = discord.ui.Button(label="Cancel", style=discord.Style.red, custom_id="cancel_ticket")
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
@@ -32,11 +29,14 @@ class TicketConfirmationView(discord.ui.View):
     def make_callback(self, dept_name):
         async def callback(interaction: discord.Interaction):
             await interaction.response.defer()
-            self.cog.pending_confirmations.discard(self.user.id)
             self.stop()
             
-            # Create the ticket channel
-            channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
+            try:
+                channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
+            except Exception:
+                await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has permission to manage channels.", view=None)
+                return
+
             if channel:
                 member = self.guild.get_member(self.user.id)
                 role_name = member.top_role.name if member else "User"
@@ -58,25 +58,19 @@ class TicketConfirmationView(discord.ui.View):
         return callback
 
     async def cancel_callback(self, interaction: discord.Interaction):
-        self.cog.pending_confirmations.discard(self.user.id)
         self.stop()
         await interaction.response.edit_message(content="❌ Ticket creation cancelled.", view=None)
 
     async def on_timeout(self):
-        self.cog.pending_confirmations.discard(self.user.id)
         try:
             if self.message:
                 await self.message.edit(content="⏳ Ticket creation timed out.", view=None)
         except Exception:
             pass
 
-
 class Modmail(commands.Cog):
-    """Modmail system with department choices, role tracking, and ticket IDs."""
-
     def __init__(self, bot):
         self.bot = bot
-        self.pending_confirmations = set()
         
         self.config = Config.get_conf(self, identifier=8472938471, force_registration=True)
         self.config.register_guild(
@@ -90,15 +84,13 @@ class Modmail(commands.Cog):
         self.config.register_channel(owner_id=None, claimed_by=None, ticket_id=None)
 
     async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general"):
-        """Creates the ticket channel and sets up tracking."""
         departments = await self.config.guild(guild).departments()
-        if department not in departments:
+        if not isinstance(departments, dict) or department not in departments:
             department = "general"
             
-        category_id = departments.get(department)
+        category_id = departments.get(department) if isinstance(departments, dict) else None
         category = guild.get_channel(category_id) if category_id else None
 
-        # Generate ticket ID (e.g., G1001)
         counter = await self.config.guild(guild).ticket_counter() + 1
         await self.config.guild(guild).ticket_counter.set(counter)
         prefix = department[0].upper() if department else "G"
@@ -138,7 +130,6 @@ class Modmail(commands.Cog):
         return channel
 
     async def _generate_html_transcript(self, channel: discord.TextChannel, owner: discord.User, closer: discord.Member, reason: str, ticket_id: str) -> discord.File:
-        """Generates an HTML transcript of the ticket channel history."""
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -187,7 +178,6 @@ class Modmail(commands.Cog):
             if member_obj:
                 role_str = member_obj.top_role.name
 
-            # Extract data from bot embeds
             if m.author.bot and m.embeds:
                 embed_obj = m.embeds[0]
                 if embed_obj.author and embed_obj.author.name:
@@ -199,7 +189,6 @@ class Modmail(commands.Cog):
                         username = embed_obj.author.name
                         avatar_url = embed_obj.author.icon_url or avatar_url
                 
-                # Pull role and timestamp out of the embed footer
                 if embed_obj.footer and embed_obj.footer.text:
                     parts = [p.strip() for p in embed_obj.footer.text.split("|")]
                     for part in parts:
@@ -211,7 +200,6 @@ class Modmail(commands.Cog):
                 if embed_obj.description:
                     content = embed_obj.description
             
-            # Format Attachments
             attachments_html = ""
             for a in m.attachments:
                 if a.content_type and a.content_type.startswith('image/'):
@@ -222,7 +210,6 @@ class Modmail(commands.Cog):
             if not content and not attachments_html:
                 continue
 
-            # Hide the rank entirely if the message was sent anonymously
             if is_anon_msg:
                 role_str = ""
 
@@ -246,15 +233,10 @@ class Modmail(commands.Cog):
         return discord.File(transcript_file, filename=f"transcript_{ticket_id}.html")
 
     async def cog_unload(self):
-        """Removes the slash commands cleanly on reload."""
         try:
             self.bot.tree.remove_command(self.ticket_group.name)
         except Exception:
             pass
-
-    # ========================
-    # ROUTING LISTENERS
-    # ========================
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -264,7 +246,6 @@ class Modmail(commands.Cog):
         if not self.bot.guilds:
             return
         
-        # Check guilds to find where the user is a member, default to the first guild if not found
         guild = None
         for g in self.bot.guilds:
             if g.get_member(message.author.id):
@@ -273,8 +254,11 @@ class Modmail(commands.Cog):
         if not guild:
             guild = self.bot.guilds[0]
 
-        # Scenario A: Inbound User DM
         if message.guild is None:
+            ctx = await self.bot.get_context(message)
+            if ctx.valid:
+                return
+
             blocked_users = await self.config.guild(guild).blocked_users()
             if message.author.id in blocked_users:
                 return
@@ -297,12 +281,8 @@ class Modmail(commands.Cog):
                 await channel.send(embed=embed, files=files)
                 await message.add_reaction("✅")
             else:
-                # If an active ID exists but the channel is missing, clear it and proceed to open a new one immediately
                 if active_channel_id:
                     await self.config.user(message.author).active_channel_id.set(None)
-
-                if message.author.id in self.pending_confirmations:
-                    return
 
                 member = guild.get_member(message.author.id)
                 if member:
@@ -311,10 +291,8 @@ class Modmail(commands.Cog):
                         return
 
                 departments = await self.config.guild(guild).departments()
-                if not departments:
+                if not isinstance(departments, dict) or not departments:
                     departments = {"general": None}
-
-                self.pending_confirmations.add(message.author.id)
                 
                 embed = discord.Embed(
                     title="🎟️ Open a Support Ticket?",
@@ -330,9 +308,8 @@ class Modmail(commands.Cog):
                     msg = await message.author.send(embed=embed, view=view)
                     view.message = msg
                 except discord.Forbidden:
-                    self.pending_confirmations.discard(message.author.id)
+                    pass
 
-        # Scenario B: Outbound Staff Mod-Channel Forwarding
         else:
             owner_id = await self.config.channel(message.channel).owner_id()
             if owner_id:
@@ -359,7 +336,6 @@ class Modmail(commands.Cog):
 
                     user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
                     
-                    # Do not show the rank anywhere if the message is anonymous
                     if is_anon:
                         guild_icon = guild.icon.url if guild.icon else self.bot.user.display_avatar.url
                         user_embed.set_author(name="Support Team", icon_url=guild_icon)
@@ -381,10 +357,6 @@ class Modmail(commands.Cog):
 
                 except discord.Forbidden:
                     await message.channel.send("❌ Error: The user has DMs disabled.")
-
-    # ========================
-    # SLASH CORE EXECUTIVE COMMANDS
-    # ========================
 
     ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets")
 
@@ -419,8 +391,8 @@ class Modmail(commands.Cog):
         departments = await self.config.guild(interaction.guild).departments()
         department = department.lower()
 
-        if department not in departments:
-            options = ", ".join([d.title() for d in departments.keys()])
+        if not isinstance(departments, dict) or department not in departments:
+            options = ", ".join([d.title() for d in departments.keys()]) if isinstance(departments, dict) else "None"
             return await interaction.response.send_message(f"❌ Department not found. Options: `{options}`", ephemeral=True)
 
         category_id = departments[department]
@@ -447,7 +419,6 @@ class Modmail(commands.Cog):
         owner_obj = user or discord.Object(id=owner_id)
         owner_obj.name = user.name if user else "Offline Identity"
 
-        # Generate logs
         transcript_file = await self._generate_html_transcript(interaction.channel, owner_obj, interaction.user, reason, ticket_id)
 
         log_channel_id = await self.config.guild(interaction.guild).log_channel_id()
@@ -481,25 +452,18 @@ class Modmail(commands.Cog):
         await self.config.channel(interaction.channel).clear()
         await interaction.channel.delete(reason=f"Modmail closure by {interaction.user.name}")
 
-    # ========================
-    # ADMIN SETUP PRESETS
-    # ========================
-
     @commands.group(name="modmailset")
     @commands.admin_or_permissions(manage_guild=True)
     async def modmailset(self, ctx):
-        """Configuration options for modmail."""
         pass
 
     @modmailset.command(name="logchannel")
     async def modmailset_logchannel(self, ctx, channel: discord.TextChannel):
-        """Set the channel where ticket transcripts are saved."""
         await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
         await ctx.send(f"✅ Logs will now be saved in {channel.mention}.")
 
     @modmailset.command(name="block")
     async def modmailset_block(self, ctx, user: discord.User):
-        """Block a user from opening tickets."""
         async with self.config.guild(ctx.guild).blocked_users() as blocked:
             if user.id not in blocked:
                 blocked.append(user.id)
@@ -509,7 +473,6 @@ class Modmail(commands.Cog):
 
     @modmailset.command(name="unblock")
     async def modmailset_unblock(self, ctx, user: discord.User):
-        """Unblock a user from opening tickets."""
         async with self.config.guild(ctx.guild).blocked_users() as blocked:
             if user.id in blocked:
                 blocked.remove(user.id)
@@ -519,25 +482,24 @@ class Modmail(commands.Cog):
 
     @modmailset.group(name="department")
     async def modmailset_department(self, ctx):
-        """Manage system department choices."""
         pass
 
     @modmailset_department.command(name="set")
     async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
-        """Link a department name to a specific category channel."""
         name = name.lower()
         async with self.config.guild(ctx.guild).departments() as deps:
+            if not isinstance(deps, dict):
+                deps = {}
             deps[name] = category.id
+            await self.config.guild(ctx.guild).departments.set(deps)
         await ctx.send(f"✅ Department **{name.title()}** is now linked to the **{category.name}** category.")
 
     @modmailset.group(name="immune")
     async def modmailset_immune(self, ctx):
-        """Manage roles that are immune from making tickets."""
         pass
 
-    @modmailset.command(name="add")
+    @modmailset_immune.command(name="add")
     async def m_im_add(self, ctx, role: discord.Role):
-        """Add a role to the ticket immunity list."""
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id not in immune:
                 immune.append(role.id)
@@ -545,9 +507,8 @@ class Modmail(commands.Cog):
             else:
                 await ctx.send("❌ That role is already on the immune list.")
 
-    @modmailset.command(name="remove")
+    @modmailset_immune.command(name="remove")
     async def m_im_remove(self, ctx, role: discord.Role):
-        """Remove a role from the ticket immunity list."""
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id in immune:
                 immune.remove(role.id)
