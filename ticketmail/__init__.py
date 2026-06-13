@@ -1,4 +1,4 @@
-from .modmail import Modmail
+from .ticketmail import Modmail
 
 async def setup(bot):
     cog = Modmail(bot)
