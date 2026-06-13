@@ -1,0 +1,15 @@
+{
+    "author": ["josh"],
+    "description": "A single-server Modmail ticket system featuring HTML transcripts, anonymous logging badges, department routing, and role-immunity defenses.",
+    "disabled": false,
+    "end_user_data_statement": "This cog stores user IDs and channel IDs in the bot's local configuration to map active support tickets. When a ticket is closed, its channel configuration metadata is wiped out. HTML transcripts are archived to a configured Discord channel and are not saved locally on the host machine.",
+    "hidden": false,
+    "install_msg": "Modmail loaded successfully. Make sure to set your log channel using `[prefix]modmailset logchannel` and map your categories using `[prefix]modmailset department set` before opening tickets. Sync slash commands using `[prefix]tree sync`.",
+    "name": "Modmail",
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Advanced single-server Modmail support ticket system.",
+    "tags": ["modmail", "tickets", "support", "moderation"],
+    "type": "COG"
+}
+
