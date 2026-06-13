@@ -243,7 +243,7 @@ class Modmail(commands.Cog):
     # SLASH COMMANDS (STAFF ACTIONS)
     # ========================
 
-    ticket_group = app_commands.Group(name="ticket", description="Manage support tickets")
+    ticket_group = app_commands.Group(name="modmail", description="Manage support tickets")
 
     @ticket_group.command(name="open", description="Manually open a ticket for a user.")
     @app_commands.default_permissions(manage_messages=True)
