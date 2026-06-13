@@ -6,7 +6,7 @@ import datetime
 
 class TicketConfirmationView(discord.ui.View):
     def __init__(self, cog, user: discord.User, guild: discord.Guild, initial_message: discord.Message, departments: dict):
-        super().__init__(timeout=120)
+        super().__init__(timeout=180) # Increased timeout window
         self.cog = cog
         self.user = user
         self.guild = guild
@@ -17,12 +17,12 @@ class TicketConfirmationView(discord.ui.View):
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
                 style=discord.Style.green,
-                custom_id=f"confirm_{dept_name}"
+                custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}" # Unique global custom_id
             )
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
             
-        cancel_button = discord.ui.Button(label="Cancel", style=discord.Style.red, custom_id="cancel_ticket")
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.Style.red, custom_id=f"cancel_{guild.id}_{user.id}")
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
 
@@ -34,7 +34,7 @@ class TicketConfirmationView(discord.ui.View):
             try:
                 channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
             except Exception as e:
-                print(f"[Modmail Error] Failed to create channel: {e}")
+                print(f"[Modmail Error] Failed to create channel via button: {e}")
                 await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has 'Manage Channels' permissions.", view=None)
                 return
 
@@ -73,7 +73,7 @@ class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         
-        # ⚠️ SET YOUR SERVER ID HERE SO DMS NEVER FAIL SILENTLY
+        # ⚠️ ENTER YOUR SERVER ID HERE TO FORCE THE COG TO WORK NATIVELY INSIDE IT
         self.SET_SERVER_ID = 123456789012345678 
 
         self.config = Config.get_conf(self, identifier=8472938471, force_registration=True)
@@ -247,13 +247,11 @@ class Modmail(commands.Cog):
         if message.author.bot:
             return
 
-        # Handle Target Server Resolution Safely
         guild = self.bot.get_guild(self.SET_SERVER_ID)
         if not guild:
             if self.bot.guilds:
                 guild = self.bot.guilds[0]
             else:
-                print("[Modmail Error] Bot is not connected to any servers.")
                 return
 
         if message.guild is None:
@@ -296,6 +294,29 @@ class Modmail(commands.Cog):
                 if not isinstance(departments, dict) or not departments:
                     departments = {"general": None}
                 
+                # 🔥 FIX: If only one department exists, bypass buttons completely and open instantly
+                if len(departments) == 1:
+                    dept_name = list(departments.keys())[0]
+                    try:
+                        channel = await self._create_ticket(guild, message.author, dept_name)
+                        if channel:
+                            role_name = member.top_role.name if member else "User"
+                            ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
+                            now = datetime.datetime.now(datetime.timezone.utc)
+                            date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
+                            
+                            files = [await a.to_file() for a in message.attachments]
+                            embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
+                            embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                            embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                            
+                            await channel.send(embed=embed, files=files)
+                            await message.add_reaction("✅")
+                    except Exception as e:
+                        print(f"[Modmail Error] Automatic ticket execution dropped: {e}")
+                    return
+
+                # If multiple departments are set, fallback to selection interface safely
                 embed = discord.Embed(
                     title="🎟️ Open a Support Ticket?",
                     description="Please choose a department below to start your ticket.",
@@ -309,8 +330,10 @@ class Modmail(commands.Cog):
                 try:
                     msg = await message.author.send(embed=embed, view=view)
                     view.message = msg
+                    # Register view to internal cache so it doesn't lose gateway tracking
+                    self.bot.add_view(view) 
                 except discord.Forbidden:
-                    print(f"[Modmail Warning] Could not send interactive prompt to {message.author.name} (DMs closed).")
+                    pass
 
         else:
             owner_id = await self.config.channel(message.channel).owner_id()
@@ -407,20 +430,20 @@ class Modmail(commands.Cog):
         await interaction.channel.edit(category=category, sync_permissions=True)
         await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
 
-        # --- USER DEPARTMENT TRANSFER NOTIFICATION ---
+        # 🔔 TRANSFERRED DEPARTMENT USER NOTIFICATION 
         user = self.bot.get_user(owner_id)
         if user:
             try:
                 embed = discord.Embed(
-                    title="🔄 Department Transfer",
-                    description=f"Your ticket **{ticket_id}** has been transferred to the **{department.title()}** department.",
+                    title="🔄 Department Transferred",
+                    description=f"Your open ticket (**{ticket_id}**) has been successfully moved to the **{department.title()}** department.",
                     color=discord.Color.orange(),
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
-                embed.set_footer(text="A representative from this department will be with you shortly.")
+                embed.set_footer(text="A specialized support member will be with you shortly.")
                 await user.send(embed=embed)
             except discord.Forbidden:
-                await interaction.channel.send("⚠️ **Note:** The user was not notified because their DMs are disabled.")
+                await interaction.channel.send("⚠️ **Note:** The user could not be sent a DM update because their private messages are closed.")
 
     @ticket_group.command(name="close", description="Close this ticket and save the transcript logs.")
     @app_commands.describe(reason="The reason for closing the ticket.")
