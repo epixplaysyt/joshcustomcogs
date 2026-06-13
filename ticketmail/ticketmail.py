@@ -22,7 +22,13 @@ class Modmail(commands.Cog):
         
         self.config.register_user(active_channel_id=None)
         self.config.register_channel(owner_id=None, claimed_by=None)
-
+    async def cog_unload(self):
+        """Clean up the slash command from the global tree when unloading/reloading."""
+        try:
+            self.bot.tree.remove_command(self.ticket_group.name)
+        except Exception:
+            pass
+            
     async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general"):
         """Helper method to create a ticket channel."""
         departments = await self.config.guild(guild).departments()
@@ -383,7 +389,3 @@ class Modmail(commands.Cog):
                 await ctx.send(f"✅ Role **{role.name}** removed from immunity list.")
             else:
                 await ctx.send("❌ Role is not in the immune list.")
-
-async def setup(bot):
-    bot.tree.add_command(Modmail.ticket_group)
-    await bot.add_cog(Modmail(bot))
