@@ -16,13 +16,13 @@ class TicketConfirmationView(discord.ui.View):
         for dept_name in departments.keys():
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
-                style=discord.Style.green,
+                style=discord.ButtonStyle.green,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}"
             )
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
             
-        cancel_button = discord.ui.Button(label="Cancel", style=discord.Style.red, custom_id=f"cancel_{guild.id}_{user.id}")
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red, custom_id=f"cancel_{guild.id}_{user.id}")
         cancel_button.callback = self.cancel_callback
         self.add_item(cancel_button)
 
@@ -242,31 +242,6 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
-    # =========================
-    # DEBUG COMMAND (ADDED FIX)
-    # =========================
-    @commands.command(name="modmaildebug")
-    @commands.admin_or_permissions(manage_guild=True)
-    async def modmail_debug(self, ctx, user: discord.User = None):
-        if user is None:
-            user = ctx.author
-
-        default_guild_id = await self.config.default_guild_id()
-        guild = self.bot.get_guild(default_guild_id) if default_guild_id else None
-
-        active_channel_id = await self.config.user(user).active_channel_id()
-        active_channel = self.bot.get_channel(active_channel_id) if active_channel_id else None
-
-        await ctx.send(
-            "```yaml\n"
-            f"Default Guild ID: {default_guild_id}\n"
-            f"Resolved Guild: {guild.name if guild else 'NONE'}\n"
-            f"Active Channel ID: {active_channel_id}\n"
-            f"Active Channel Exists: {bool(active_channel)}\n"
-            f"Bot Guild Count: {len(self.bot.guilds)}\n"
-            "```"
-        )
-
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -274,7 +249,7 @@ class Modmail(commands.Cog):
 
         if message.guild is None:
             ctx = await self.bot.get_context(message)
-            if message.content.startswith("!"):
+            if ctx.valid:
                 return
 
             # Global Channel Look-up (Fixes active ticket desync)
@@ -368,7 +343,6 @@ class Modmail(commands.Cog):
                 try:
                     msg = await message.author.send(embed=embed, view=view)
                     view.message = msg
-                    self.bot.add_view(view) 
                 except discord.Forbidden:
                     pass
 
@@ -581,7 +555,7 @@ class Modmail(commands.Cog):
     async def modmailset_immune(self, ctx):
         pass
 
-    @modmailset.command(name="add")
+    @modmailset_immune.command(name="add")
     async def m_im_add(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id not in immune:
@@ -590,7 +564,7 @@ class Modmail(commands.Cog):
             else:
                 await ctx.send("❌ That role is already on the immune list.")
 
-    @modmailset.command(name="remove")
+    @modmailset_immune.command(name="remove")
     async def m_im_remove(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id in immune:
