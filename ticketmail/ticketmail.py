@@ -188,26 +188,26 @@ class Modmail(commands.Cog):
 
             # Extract author data through logged embeds
             if m.author.bot and m.embeds:
-                emb = m.embeds[0]
-                if emb.author and emb.author.name:
-                    if emb.author.name.startswith("[Anonymous]"):
-                        username = emb.author.name.replace("[Anonymous] ", "")
-                        avatar_url = emb.author.icon_url or avatar_url
+                embed_obj = m.embeds[0]
+                if embed_obj.author and embed_obj.author.name:
+                    if embed_obj.author.name.startswith("[Anonymous]"):
+                        username = embed_obj.author.name.replace("[Anonymous] ", "")
+                        avatar_url = embed_obj.author.icon_url or avatar_url
                     else:
-                        username = emb.author.name
-                        avatar_url = emb.author.icon_url or avatar_url
+                        username = embed_obj.author.name
+                        avatar_url = embed_obj.author.icon_url or avatar_url
                 
                 # Extract role info and timestamp directly out of the embed's footer signature if it exists
-                if emb.footer and emb.footer.text:
-                    parts = [p.strip() for p in emb.footer.text.split("|")]
+                if embed_obj.footer and embed_obj.footer.text:
+                    parts = [p.strip() for p in embed_obj.footer.text.split("|")]
                     for part in parts:
                         if part.startswith("Role:"):
                             role_str = part.replace("Role: ", "")
                         if "UTC" in part and not part.startswith("Ticket ID"):
                             timestamp = part
 
-                if emb.description:
-                    content = emb.description
+                if embed_obj.description:
+                    content = embed_obj.description
             
             # Format Attachments
             attachments_html = ""
@@ -394,3 +394,120 @@ class Modmail(commands.Cog):
     @ticket_group.command(name="close", description="Deconstruct active ticket pipelines, compile system logs, and dispatch notifications.")
     @app_commands.describe(reason="Reason details passed strictly to target user summary.")
     @app_commands.default_permissions(manage_messages=True)
+    async def ticket_close(self, interaction: discord.Interaction, reason: str):
+        owner_id = await self.config.channel(interaction.channel).owner_id()
+        if not owner_id:
+            return await interaction.response.send_message("❌ Execution context invalid: Not an active channel link.", ephemeral=True)
+
+        await interaction.response.send_message("🔒 Initiating context deconstruction sequences...", ephemeral=True)
+        
+        ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
+        user = self.bot.get_user(owner_id)
+        owner_obj = user or discord.Object(id=owner_id)
+        owner_obj.name = user.name if user else "Offline Identity"
+
+        # Compilation phase
+        transcript_file = await self._generate_html_transcript(interaction.channel, owner_obj, interaction.user, reason, ticket_id)
+
+        log_channel_id = await self.config.guild(interaction.guild).log_channel_id()
+        log_channel = interaction.guild.get_channel(log_channel_id) if log_channel_id else None
+        
+        if log_channel:
+            date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+            embed = discord.Embed(title=f"🔒 Archived Ticket Record — {ticket_id}", color=discord.Color.red())
+            embed.add_field(name="User", value=f"<@{owner_id}> ({owner_id})")
+            embed.add_field(name="Closed By", value=interaction.user.mention)
+            embed.add_field(name="Reason Profile", value=reason, inline=False)
+            embed.set_footer(text=f"Archive Date: {date_str}")
+            await log_channel.send(embed=embed, file=transcript_file)
+
+        if user:
+            try:
+                date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+                user_embed = discord.Embed(
+                    title=f"🔒 Ticket Closed — {ticket_id}",
+                    description=f"Your ticket has been officially closed by: **{interaction.user.name}**.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+                user_embed.add_field(name="Resolution Reason", value=reason, inline=False)
+                user_embed.set_footer(text=f"Date: {date_str}")
+                await user.send(embed=user_embed)
+            except discord.Forbidden:
+                pass
+        
+        await self.config.user_from_id(owner_id).active_channel_id.set(None)
+        await self.config.channel(interaction.channel).clear()
+        await interaction.channel.delete(reason=f"Modmail pipeline closure: {interaction.user.name}")
+
+    # ========================
+    # ADMIN SETUP PRESETS
+    # ========================
+
+    @commands.group(name="modmailset")
+    @commands.admin_or_permissions(manage_guild=True)
+    async def modmailset(self, ctx):
+        """Configuration entry terminal parameters."""
+        pass
+
+    @modmailset.command(name="logchannel")
+    async def modmailset_logchannel(self, ctx, channel: discord.TextChannel):
+        """Bind file transcript payload storage destinations."""
+        await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
+        await ctx.send(f"✅ Archive pipeline targeted into {channel.mention}.")
+
+    @modmailset.command(name="block")
+    async def modmailset_block(self, ctx, user: discord.User):
+        """Restricts users from creating confirmation views."""
+        async with self.config.guild(ctx.guild).blocked_users() as blocked:
+            if user.id not in blocked:
+                blocked.append(user.id)
+                await ctx.send(f"🚫 User ID **{user.name}** dropped from configuration routing access paths.")
+            else:
+                await ctx.send("❌ Record registers matching entity state already blocked.")
+
+    @modmailset.command(name="unblock")
+    async def modmailset_unblock(self, ctx, user: discord.User):
+        """Restores a blacklisted individual's access paths."""
+        async with self.config.guild(ctx.guild).blocked_users() as blocked:
+            if user.id in blocked:
+                blocked.remove(user.id)
+                await ctx.send(f"✅ Identity data profile for **{user.name}** cleared.")
+            else:
+                await ctx.send("❌ Identity registry data lookup match failed.")
+
+    @modmailset.group(name="department")
+    async def modmailset_department(self, ctx):
+        """Map functional system category containers."""
+        pass
+
+    @modmailset_department.command(name="set")
+    async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
+        """Maps an individual system classification to a categorical parent."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).departments() as deps:
+            deps[name] = category.id
+        await ctx.send(f"✅ Managed category group **{name.title()}** attached into **{category.name}**.")
+
+    @modmailset.group(name="immune")
+    async def modmailset_immune(self, ctx):
+        """Manage organizational bypass tags."""
+        pass
+
+    @modmailset.command(name="add")
+    async def m_im_add(self, ctx, role: discord.Role):
+        async with self.config.guild(ctx.guild).immune_roles() as immune:
+            if role.id not in immune:
+                immune.append(role.id)
+                await ctx.send(f"✅ Filter arrays added immune protection exceptions for: **{role.name}**.")
+            else:
+                await ctx.send("❌ Internal array tables match duplicate profile entries.")
+
+    @modmailset.command(name="remove")
+    async def m_im_remove(self, ctx, role: discord.Role):
+        async with self.config.guild(ctx.guild).immune_roles() as immune:
+            if role.id in immune:
+                immune.remove(role.id)
+                await ctx.send(f"✅ Removed role protection attributes for: **{role.name}**.")
+            else:
+                await ctx.send("❌ No filtering attributes found for given tag group elements.")
