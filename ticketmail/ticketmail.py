@@ -6,7 +6,7 @@ import datetime
 
 class TicketConfirmationView(discord.ui.View):
     def __init__(self, cog, user: discord.User, guild: discord.Guild, initial_message: discord.Message, departments: dict):
-        super().__init__(timeout=180) # Increased timeout window
+        super().__init__(timeout=180)
         self.cog = cog
         self.user = user
         self.guild = guild
@@ -17,7 +17,7 @@ class TicketConfirmationView(discord.ui.View):
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
                 style=discord.Style.green,
-                custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}" # Unique global custom_id
+                custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}"
             )
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
@@ -72,11 +72,11 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
-        # ⚠️ ENTER YOUR SERVER ID HERE TO FORCE THE COG TO WORK NATIVELY INSIDE IT
-        self.SET_SERVER_ID = 123456789012345678 
-
         self.config = Config.get_conf(self, identifier=8472938471, force_registration=True)
+        
+        # Global register for default server option
+        self.config.register_global(default_guild_id=None)
+        
         self.config.register_guild(
             log_channel_id=None,
             immune_roles=[],
@@ -247,26 +247,21 @@ class Modmail(commands.Cog):
         if message.author.bot:
             return
 
-        guild = self.bot.get_guild(self.SET_SERVER_ID)
-        if not guild:
-            if self.bot.guilds:
-                guild = self.bot.guilds[0]
-            else:
-                return
-
         if message.guild is None:
             ctx = await self.bot.get_context(message)
             if ctx.valid:
                 return
 
-            blocked_users = await self.config.guild(guild).blocked_users()
-            if message.author.id in blocked_users:
-                return
-
+            # Global Channel Look-up (Fixes active ticket desync)
             active_channel_id = await self.config.user(message.author).active_channel_id()
-            channel = guild.get_channel(active_channel_id) if active_channel_id else None
+            channel = self.bot.get_channel(active_channel_id) if active_channel_id else None
 
             if channel:
+                guild = channel.guild
+                blocked_users = await self.config.guild(guild).blocked_users()
+                if message.author.id in blocked_users:
+                    return
+
                 ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
                 member = guild.get_member(message.author.id)
                 role_name = member.top_role.name if member else "User"
@@ -284,6 +279,26 @@ class Modmail(commands.Cog):
                 if active_channel_id:
                     await self.config.user(message.author).active_channel_id.set(None)
 
+                # Dynamic Guild Resolution Strategy (Fixes creation issue)
+                default_guild_id = await self.config.default_guild_id()
+                guild = self.bot.get_guild(default_guild_id) if default_guild_id else None
+                
+                if not guild:  # Fallback to original shared-server structure
+                    for g in self.bot.guilds:
+                        if g.get_member(message.author.id):
+                            guild = g
+                            break
+                            
+                if not guild:  # Ultimate Fallback
+                    guild = self.bot.guilds[0] if self.bot.guilds else None
+
+                if not guild:
+                    return
+
+                blocked_users = await self.config.guild(guild).blocked_users()
+                if message.author.id in blocked_users:
+                    return
+
                 member = guild.get_member(message.author.id)
                 if member:
                     immune_roles = await self.config.guild(guild).immune_roles()
@@ -294,7 +309,6 @@ class Modmail(commands.Cog):
                 if not isinstance(departments, dict) or not departments:
                     departments = {"general": None}
                 
-                # 🔥 FIX: If only one department exists, bypass buttons completely and open instantly
                 if len(departments) == 1:
                     dept_name = list(departments.keys())[0]
                     try:
@@ -316,7 +330,6 @@ class Modmail(commands.Cog):
                         print(f"[Modmail Error] Automatic ticket execution dropped: {e}")
                     return
 
-                # If multiple departments are set, fallback to selection interface safely
                 embed = discord.Embed(
                     title="🎟️ Open a Support Ticket?",
                     description="Please choose a department below to start your ticket.",
@@ -330,7 +343,6 @@ class Modmail(commands.Cog):
                 try:
                     msg = await message.author.send(embed=embed, view=view)
                     view.message = msg
-                    # Register view to internal cache so it doesn't lose gateway tracking
                     self.bot.add_view(view) 
                 except discord.Forbidden:
                     pass
@@ -350,7 +362,7 @@ class Modmail(commands.Cog):
                 is_anon = message.content.startswith("!anon ")
                 clean_content = message.content[6:].strip() if is_anon else message.content
 
-                member = guild.get_member(message.author.id)
+                member = message.guild.get_member(message.author.id)
                 role_name = member.top_role.name if member else "Staff"
                 now = datetime.datetime.now(datetime.timezone.utc)
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
@@ -362,7 +374,7 @@ class Modmail(commands.Cog):
                     user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
                     
                     if is_anon:
-                        guild_icon = guild.icon.url if guild.icon else self.bot.user.display_avatar.url
+                        guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
                         user_embed.set_author(name="Support Team", icon_url=guild_icon)
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                     else:
@@ -430,7 +442,6 @@ class Modmail(commands.Cog):
         await interaction.channel.edit(category=category, sync_permissions=True)
         await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
 
-        # 🔔 TRANSFERRED DEPARTMENT USER NOTIFICATION 
         user = self.bot.get_user(owner_id)
         if user:
             try:
@@ -498,6 +509,12 @@ class Modmail(commands.Cog):
     async def modmailset(self, ctx):
         pass
 
+    @modmailset.command(name="setdefault")
+    async def modmailset_setdefault(self, ctx):
+        """Set the current server as the default server for incoming DMs."""
+        await self.config.default_guild_id.set(ctx.guild.id)
+        await ctx.send(f"✅ **{ctx.guild.name}** has been established as the default destination server for incoming tickets.")
+
     @modmailset.command(name="logchannel")
     async def modmailset_logchannel(self, ctx, channel: discord.TextChannel):
         await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
@@ -539,7 +556,7 @@ class Modmail(commands.Cog):
     async def modmailset_immune(self, ctx):
         pass
 
-    @modmailset_immune.command(name="add")
+    @modmailset.command(name="add")
     async def m_im_add(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id not in immune:
