@@ -242,9 +242,9 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
-   @commands.command(name="modmaildebug"
-   @commands.admin_or_permissions(manage_guild=True)
-   async def modmail_debug(self, ctx, user: discord.User = None):
+    @commands.command(name="modmaildebug"
+    @commands.admin_or_permissions(manage_guild=True)
+    async def modmail_debug(self, ctx, user: discord.User = None):
        """Debug modmail configuration."""
        if user is None:
         user = ctx.author
