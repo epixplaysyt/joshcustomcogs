@@ -33,8 +33,9 @@ class TicketConfirmationView(discord.ui.View):
             
             try:
                 channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
-            except Exception:
-                await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has permission to manage channels.", view=None)
+            except Exception as e:
+                print(f"[Modmail Error] Failed to create channel: {e}")
+                await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has 'Manage Channels' permissions.", view=None)
                 return
 
             if channel:
@@ -72,6 +73,9 @@ class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         
+        # ⚠️ SET YOUR SERVER ID HERE SO DMS NEVER FAIL SILENTLY
+        self.SET_SERVER_ID = 123456789012345678 
+
         self.config = Config.get_conf(self, identifier=8472938471, force_registration=True)
         self.config.register_guild(
             log_channel_id=None,
@@ -243,16 +247,14 @@ class Modmail(commands.Cog):
         if message.author.bot:
             return
 
-        if not self.bot.guilds:
-            return
-        
-        guild = None
-        for g in self.bot.guilds:
-            if g.get_member(message.author.id):
-                guild = g
-                break
+        # Handle Target Server Resolution Safely
+        guild = self.bot.get_guild(self.SET_SERVER_ID)
         if not guild:
-            guild = self.bot.guilds[0]
+            if self.bot.guilds:
+                guild = self.bot.guilds[0]
+            else:
+                print("[Modmail Error] Bot is not connected to any servers.")
+                return
 
         if message.guild is None:
             ctx = await self.bot.get_context(message)
@@ -308,7 +310,7 @@ class Modmail(commands.Cog):
                     msg = await message.author.send(embed=embed, view=view)
                     view.message = msg
                 except discord.Forbidden:
-                    pass
+                    print(f"[Modmail Warning] Could not send interactive prompt to {message.author.name} (DMs closed).")
 
         else:
             owner_id = await self.config.channel(message.channel).owner_id()
@@ -401,8 +403,24 @@ class Modmail(commands.Cog):
         if not category:
             return await interaction.response.send_message(f"❌ No category found for `{department.title()}`.", ephemeral=True)
 
+        ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
         await interaction.channel.edit(category=category, sync_permissions=True)
         await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
+
+        # --- USER DEPARTMENT TRANSFER NOTIFICATION ---
+        user = self.bot.get_user(owner_id)
+        if user:
+            try:
+                embed = discord.Embed(
+                    title="🔄 Department Transfer",
+                    description=f"Your ticket **{ticket_id}** has been transferred to the **{department.title()}** department.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+                embed.set_footer(text="A representative from this department will be with you shortly.")
+                await user.send(embed=embed)
+            except discord.Forbidden:
+                await interaction.channel.send("⚠️ **Note:** The user was not notified because their DMs are disabled.")
 
     @ticket_group.command(name="close", description="Close this ticket and save the transcript logs.")
     @app_commands.describe(reason="The reason for closing the ticket.")
@@ -507,7 +525,7 @@ class Modmail(commands.Cog):
             else:
                 await ctx.send("❌ That role is already on the immune list.")
 
-    @modmailset_immune.command(name="remove")
+    @modmailset.command(name="remove")
     async def m_im_remove(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id in immune:
