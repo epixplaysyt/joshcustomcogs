@@ -103,8 +103,7 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "👷 Developing new updates...",
-            "🚍 Driving buses..."
+            "🔒 Secure and encrypted log archives"
         ]
         self.status_index = 0
         
@@ -247,14 +246,24 @@ class Modmail(commands.Cog):
         await channel.send(embed=embed)
         
         try:
-            user_msg = (
-                f"✅ **Ticket Opened ({ticket_id})**\n"
-                f"You are connected to the **{department.title()}** department.\n"
-                f"Expected response time ({'In-Hours' if in_hours else 'Out-of-Hours'}): `{avg_str}`"
+            user_embed = discord.Embed(
+                title=f"✅ Ticket Opened ({ticket_id})",
+                description=f"You are connected to the **{department.title()}** department.",
+                color=discord.Color.green(),
+                timestamp=now
+            )
+            user_embed.add_field(
+                name=f"Expected Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'})",
+                value=f"`{avg_str}`",
+                inline=False
             )
             if not in_hours and next_open:
-                user_msg += f"\n\n⚠️ *Note: We are currently closed. The team will review your request when online <t:{next_open}:R>.*"
-            await user.send(user_msg)
+                user_embed.add_field(
+                    name="⚠️ Notice",
+                    value=f"We are currently closed. The team will review your request when online <t:{next_open}:R>.",
+                    inline=False
+                )
+            await user.send(embed=user_embed)
         except discord.Forbidden:
             await channel.send("⚠️ **Warning:** The user has DMs disabled.")
 
@@ -626,7 +635,7 @@ class Modmail(commands.Cog):
                 )
                 user_embed.add_field(name="Reason", value=reason, inline=False)
                 user_embed.set_footer(text=f"Date: {date_str}")
-                await user.send(user_embed)
+                await user.send(embed=user_embed)
             except discord.Forbidden:
                 pass
         
@@ -700,7 +709,7 @@ class Modmail(commands.Cog):
     async def modmailset_immune(self, ctx):
         pass
 
-    @modmailset_immune.command(name="add")
+    @modmailset.command(name="add")
     async def m_im_add(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id not in immune:
@@ -709,7 +718,7 @@ class Modmail(commands.Cog):
             else:
                 await ctx.send("❌ That role is already on the immune list.")
 
-    @modmailset_immune.command(name="remove")
+    @modmailset.command(name="remove")
     async def m_im_remove(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id in immune:
