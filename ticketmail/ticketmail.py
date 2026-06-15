@@ -673,7 +673,7 @@ class Modmail(commands.Cog):
         await self.config.guild(ctx.guild).busy_mode.set(new_state)
         
         if new_state:
-            await ctx.send("🚨 **Busy mode has been ENABLED.")
+            await ctx.send("🚨 **Busy mode has been ENABLED.**")
         else:
             await ctx.send("✅ **Busy mode has been DISABLED.** Normal scheduling operations resumed.")
 
