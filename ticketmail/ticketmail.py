@@ -673,9 +673,7 @@ class Modmail(commands.Cog):
         await self.config.guild(ctx.guild).busy_mode.set(new_state)
         
         if new_state:
-            await ctx.send("🚨 **Busy mode has been ENABLED.**\n"
-                           "* The bot status is now overridden to **Do Not Disturb**.\n"
-                           "* New ticket owners will receive a dynamic high-volume warning embed field.")
+            await ctx.send("🚨 **Busy mode has been ENABLED.")
         else:
             await ctx.send("✅ **Busy mode has been DISABLED.** Normal scheduling operations resumed.")
 
