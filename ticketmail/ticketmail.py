@@ -103,7 +103,8 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "🔒 Secure and encrypted log archives"
+            "🚍 Driving a bus...",
+            "👷 Developing updates..."
         ]
         self.status_index = 0
         
