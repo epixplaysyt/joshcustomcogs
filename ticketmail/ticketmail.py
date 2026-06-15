@@ -88,7 +88,8 @@ class Modmail(commands.Cog):
             ticket_counter=1000,
             departments={"general": None},
             support_hours={"start": None, "end": None},
-            response_stats={}
+            response_stats={},
+            busy_mode=False
         )
         self.config.register_user(active_channel_id=None)
         self.config.register_channel(
@@ -103,8 +104,7 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "🚍 Driving a bus...",
-            "👷 Developing updates..."
+            "👷 Developing new updates..."
         ]
         self.status_index = 0
         
@@ -173,10 +173,14 @@ class Modmail(commands.Cog):
         if not guild: 
             return
             
-        hours = await self.config.guild(guild).support_hours()
-        in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
+        busy_mode = await self.config.guild(guild).busy_mode()
         
-        target_status = discord.Status.online if in_hours else discord.Status.idle
+        if busy_mode:
+            target_status = discord.Status.dnd
+        else:
+            hours = await self.config.guild(guild).support_hours()
+            in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
+            target_status = discord.Status.online if in_hours else discord.Status.idle
         
         status_text = self.custom_statuses[self.status_index]
         self.status_index = (self.status_index + 1) % len(self.custom_statuses)
@@ -213,6 +217,7 @@ class Modmail(commands.Cog):
         hours = await self.config.guild(guild).support_hours()
         in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
         stats = await self.config.guild(guild).response_stats()
+        busy_mode = await self.config.guild(guild).busy_mode()
         
         dept_stats = stats.get(department, {})
         time_prefix = 'in' if in_hours else 'out'
@@ -236,6 +241,9 @@ class Modmail(commands.Cog):
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
                 f"Type here to reply, or use `!anon ` to send anonymous messages.")
         
+        if busy_mode:
+            desc += "\n\n⚠️ **Notice:** This ticket was opened during high volume congestion parameters."
+
         next_open = None
         if not in_hours and hours.get('start'):
             next_open = self.get_next_open_timestamp(hours.get('start'))
@@ -258,9 +266,17 @@ class Modmail(commands.Cog):
                 value=f"`{avg_str}`",
                 inline=False
             )
+            
+            if busy_mode:
+                user_embed.add_field(
+                    name="⚠️ High Ticket Volume Warning",
+                    value="We are currently experiencing a large influx of support tickets. There may be a longer delay than usual before staff are able to answer. Thank you for your understanding and patience!",
+                    inline=False
+                )
+                
             if not in_hours and next_open:
                 user_embed.add_field(
-                    name="⚠️ Notice",
+                    name="🌙 Operations Closed",
                     value=f"We are currently closed. The team will review your request when online <t:{next_open}:R>.",
                     inline=False
                 )
@@ -648,6 +664,20 @@ class Modmail(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def modmailset(self, ctx):
         pass
+
+    @modmailset.command(name="busy")
+    async def modmailset_busy(self, ctx):
+        """Toggle busy mode (High influx warnings & DnD Status overrides)."""
+        current_state = await self.config.guild(ctx.guild).busy_mode()
+        new_state = not current_state
+        await self.config.guild(ctx.guild).busy_mode.set(new_state)
+        
+        if new_state:
+            await ctx.send("🚨 **Busy mode has been ENABLED.**\n"
+                           "* The bot status is now overridden to **Do Not Disturb**.\n"
+                           "* New ticket owners will receive a dynamic high-volume warning embed field.")
+        else:
+            await ctx.send("✅ **Busy mode has been DISABLED.** Normal scheduling operations resumed.")
 
     @modmailset.command(name="hours")
     async def modmailset_hours(self, ctx, start_time: str = None, end_time: str = None):
