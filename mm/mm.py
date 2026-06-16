@@ -26,7 +26,7 @@ class MMWelcome(commands.Cog):
                     "items": [
                         {
                             "media": {
-                                "url": "https://cdn.discordapp.com/attachments/1188935389440913500/1516545432464134246/Your_paragraph_text_1.png?ex=6a33087f&is=6a31b6ff&hm=441c6b10294e9e77bb5cd395b08a289d21587cc1092bf4cf6af0199d901a3747"
+                                "url": "https://cdn.discordapp.com/attachments/1188935389440913500/1516562155967742072/Your_paragraph_text_1.png?ex=6a331812&is=6a31c692&hm=95400e12f2a784e2fd0537828b99ff4bf19f5e1d80eb3cf8425cf57f6a18a980"
                             }
                         }
                     ]
@@ -59,7 +59,7 @@ class MMWelcome(commands.Cog):
                         },
                         {
                             "type": 10,
-                            "content": "## Our Roles\n- <@1505601180276097084>: The high-level leadership team responsible for the strategic decisions, final approvals, and overall direction of the studio.\n\n- <@1516556336811348158>: The management team that handles daily logistics, coordinates staff teams, and ensures everything runs smoothly.\n\n- <@1374807363093270626>: The technical and creative team who are actively constructing our upcoming experiences.\n\n- <@1341181728462475315>: The dedicated team responsible for keeping the community safe, answering support questions, and enforcing server rules.\n\n- <@1498003777620545729>: The creative team responsible for running events, hosting activities, and keeping the server active and fun.\n\n- <@1181635931413954683> The core of our community. This role belongs to all of our group members!"
+                            "content": "## Our Roles\n- <@&1505601180276097084>: The high-level leadership team responsible for the strategic decisions, final approvals, and overall direction of the studio.\n\n- <@&1516556336811348158>: The management team that handles daily logistics, coordinates staff teams, and ensures everything runs smoothly.\n\n- <@&1374807363093270626>: The technical and creative team who are actively constructing our upcoming experiences.\n\n- <@&1341181728462475315>: The dedicated team responsible for keeping the community safe, answering support questions, and enforcing server rules.\n\n- <@&1498003777620545729>: The creative team responsible for running events, hosting activities, and keeping the server active and fun.\n\n- <@&1181635931413954683> The core of our community. This role belongs to all of our group members!"
                         },
                         {
                             "type": 14,
