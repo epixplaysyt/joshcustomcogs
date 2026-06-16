@@ -1,0 +1,9 @@
+{
+    "author": ["josh :)"],
+    "description": "A last to leave event automation cog.",
+    "disabled": false,
+    "name": "LastToLeave",
+    "short": "Automation for last to leave.",
+    "tags": ["utility","automation","event"],
+    "requirements": []
+}
