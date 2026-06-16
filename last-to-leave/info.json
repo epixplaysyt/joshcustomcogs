@@ -1,9 +1,14 @@
-{
-    "author": ["josh :)"],
-    "description": "A last to leave event automation cog.",
+
+    "author": ["josh"],
+    "description": "A automation cog for a LTL event",
     "disabled": false,
-    "name": "LastToLeave",
-    "short": "Automation for last to leave.",
-    "tags": ["utility","automation","event"],
-    "requirements": []
+    "end_user_data_statement": "This cog temporarily stores VC logs to remove roles from users.",
+    "hidden": false,
+    "install_msg": "LTL loaded successfully.",
+    "name": "Last to Leave",
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Advanced automation cog for LTL.",
+    "tags": ["automation", "last-to-leave", "vc", "event"],
+    "type": "COG"
 }
