@@ -64,7 +64,7 @@ class Guesses(commands.Cog):
         await channel.set_permissions(guild.default_role, send_messages=True)
         msg_text = await self.config.guild(guild).msg_open()
         embed = discord.Embed(description=msg_text, color=discord.Color.green())
-        embed.set_footer(text=f"Cooldowns | Reg: {reg_cd}m | Win: {win_cd}m | Auto-Mark: {'✅' if auto_mark else '❌'}")
+        embed.set_footer(text=f"Cooldowns | Regular: {reg_cd}m | Winners: {win_cd}m | Auto-Mark: {'✅ Enabled' if auto_mark else '❌ Disabled'}")
         await channel.send(embed=embed)
 
     async def _close_guessing_channel(self, guild, channel, answer, winner=None):
@@ -86,12 +86,12 @@ class Guesses(commands.Cog):
             self.pending_requests.add(guild.id)
             view = ManagerApprovalView(self, interaction, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
             for m in guild.get_role(config["role_manager"]).members:
-                try: await m.send(f"**Approval Required:** {interaction.user.mention} needs approval.", view=view)
+                try: await m.send(f"**Approval Required:** {interaction.user.mention} needs probationary approval.", view=view)
                 except: continue
             return await interaction.response.send_message("Request sent.", ephemeral=True)
         
         await self._open_guessing_channel(guild, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
-        await interaction.response.send_message("Channel opened.", ephemeral=True)
+        await interaction.response.send_message("Channel opened and guessing started.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
