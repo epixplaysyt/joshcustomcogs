@@ -25,7 +25,7 @@ class MMWelcome(commands.Cog):
                     "items": [
                         {
                             "media": {
-                                "url": "https://cdn.discordapp.com/attachments/1188935389440913500/1516545432464134246/Your_paragraph_text_1.png?ex=6a33087f&is=6a31b6ff&hm=441c6b10294e9e77bb5cd395b08a289d21587cc1092bf4cf6af0199d901a3747"
+                                "url": "https://cdn.discordapp.com/attachments/1188935389440913500/1516562155967742072/Your_paragraph_text_1.png?ex=6a33c0d2&is=6a326f52&hm=68db7431a197ce89c8d2aec982414238b41c5c118dc213708f9d64ce68208240&"
                             }
                         }
                     ]
