@@ -20,7 +20,7 @@ def get_edit_distance(s1: str, s2: str) -> int:
 
 class ManagerApprovalView(discord.ui.View):
     def __init__(self, cog, interaction: discord.Interaction, channel: discord.TextChannel, answer: str, auto_mark: bool, reg_cd: int, win_cd: int):
-        super().__init__(timeout=600)  # View expires after 10 minutes
+        super().__init__(timeout=6000)  # View expires after an hour
         self.cog = cog
         self.interaction = interaction
         self.channel = channel
