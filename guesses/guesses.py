@@ -52,9 +52,14 @@ class Guesses(commands.Cog):
             msg_duplicate="{user}, you have already made that guess for this question!",
             msg_cooldown="{user}, you are on cooldown! You can guess again in {time}."
         )
-        self.is_active, self.user_guesses, self.last_guess_time = False, {}, {}
-        self.pending_requests, self.session_answer = set(), ""
-        self.session_auto_mark, self.session_regular_cd, self.session_winner_cd = False, 120, 30
+        self.is_active = False
+        self.user_guesses = {}
+        self.last_guess_time = {}
+        self.pending_requests = set()
+        self.session_answer = ""
+        self.session_auto_mark = False
+        self.session_regular_cd = 120
+        self.session_winner_cd = 30
 
     async def _open_guessing_channel(self, guild, channel, answer, auto_mark, reg_cd, win_cd):
         self.is_active = True
@@ -64,7 +69,7 @@ class Guesses(commands.Cog):
         await channel.set_permissions(guild.default_role, send_messages=True)
         msg_text = await self.config.guild(guild).msg_open()
         embed = discord.Embed(description=msg_text, color=discord.Color.green())
-        embed.set_footer(text=f"Cooldowns | Regular: {reg_cd}m | Winners: {win_cd}m | Auto-Mark: {'✅ Enabled' if auto_mark else '❌ Disabled'}")
+        embed.set_footer(text=f"Cooldowns | Reg: {reg_cd}m | Win: {win_cd}m | Auto-Mark: {'✅' if auto_mark else '❌'}")
         await channel.send(embed=embed)
 
     async def _close_guessing_channel(self, guild, channel, answer, winner=None):
@@ -86,12 +91,12 @@ class Guesses(commands.Cog):
             self.pending_requests.add(guild.id)
             view = ManagerApprovalView(self, interaction, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
             for m in guild.get_role(config["role_manager"]).members:
-                try: await m.send(f"**Approval Required:** {interaction.user.mention} needs probationary approval.", view=view)
+                try: await m.send(f"**Approval Required:** {interaction.user.mention} needs approval.", view=view)
                 except: continue
-            return await interaction.response.send_message("Request sent.", ephemeral=True)
+            return await interaction.response.send_message("Request sent to all managers.", ephemeral=True)
         
         await self._open_guessing_channel(guild, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
-        await interaction.response.send_message("Channel opened and guessing started.", ephemeral=True)
+        await interaction.response.send_message("Channel opened.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -103,8 +108,28 @@ class Guesses(commands.Cog):
         if guess_text in self.user_guesses[message.author.id]:
             await message.delete()
             return await message.channel.send(config["msg_duplicate"].replace("{user}", message.author.mention), delete_after=10)
-            
+
+        roles = [r.id for r in message.author.roles]
+        is_booster = message.author.premium_since is not None or config["role_booster"] in roles
+        is_winner = config["role_winner"] in roles
+        
+        if not (is_booster or is_winner):
+            cd = self.session_regular_cd
+            last = self.last_guess_time.get(message.author.id)
+            if last and (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() < cd * 60:
+                await message.delete()
+                return await message.channel.send(config["msg_cooldown"].replace("{user}", message.author.mention).replace("{time}", f"{cd}m"), delete_after=10)
+        
+        elif is_booster or is_winner:
+            cd = self.session_winner_cd
+            last = self.last_guess_time.get(message.author.id)
+            if last and (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() < cd * 60:
+                await message.delete()
+                return await message.channel.send(config["msg_cooldown"].replace("{user}", message.author.mention).replace("{time}", f"{cd}m"), delete_after=10)
+
         self.user_guesses[message.author.id].add(guess_text)
+        self.last_guess_time[message.author.id] = datetime.datetime.now(datetime.timezone.utc)
+        
         if self.session_auto_mark and get_edit_distance(guess_text, self.session_answer.lower()) <= 1:
             await message.add_reaction("✅")
             await self._close_guessing_channel(message.guild, message.channel, self.session_answer, winner=message.author)
