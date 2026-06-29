@@ -49,7 +49,7 @@ class DynamicRequestView(discord.ui.View):
 
         if "kick" in req_type and isinstance(target, discord.Member):
             dm_embed = discord.Embed(title=f"Kicked from {guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
-            await self.cog._dm_user(target, dm_embed)
+            await self.cog._dm_user(target, dm_embed, tag_user=True)
             try:
                 await target.kick(reason=reason)
             except discord.HTTPException:
@@ -164,6 +164,36 @@ class AdvancedMod(commands.Cog):
 
     async def _has_level(self, ctx: commands.Context, level: int) -> bool:
         return await self._has_level_member(ctx.guild, ctx.author, level)
+
+    async def _is_allowed_to_moderate(self, ctx: commands.Context, target: typing.Union[discord.Member, discord.User]) -> typing.Tuple[bool, str]:
+        """Atomic failsafe evaluation engine preventing out-of-order moderation loops."""
+        if ctx.author == target:
+            return False, "❌ Safeguard Violation: You cannot execute moderation sequences against yourself."
+        
+        if target == ctx.guild.me:
+            return False, "❌ Safeguard Violation: Systems are hard-locked against processing internal loops on the bot client."
+            
+        if target == ctx.guild.owner:
+            return False, "❌ Safeguard Violation: Server ownership profiles are strictly immune to administrative overrides."
+            
+        if isinstance(target, discord.Member):
+            # 1. Native Discord API Role Weighting Checks
+            if ctx.author != ctx.guild.owner and target.top_role >= ctx.author.top_role:
+                return False, "❌ Hierarchy Refusal: Target holds an equal or superior role position within Discord's native hierarchy."
+                
+            # 2. Custom Config-Level Matrix Checks
+            mod_level = 0
+            target_level = 0
+            for lvl in range(1, 6):
+                if await self._has_level_member(ctx.guild, ctx.author, lvl):
+                    mod_level = lvl
+                if await self._has_level_member(ctx.guild, target, lvl):
+                    target_level = lvl
+                    
+            if ctx.author != ctx.guild.owner and target_level >= mod_level and target_level > 0:
+                return False, f"❌ Hierarchy Refusal: Target holds an authorized internal clearance rank equal to or higher than yours (Your Level: Class {mod_level} | Target Level: Class {target_level})."
+
+        return True, ""
 
     def _get_proof(self, proof_link: str = None, attachment: discord.Attachment = None) -> str:
         if attachment:
@@ -309,6 +339,10 @@ class AdvancedMod(commands.Cog):
     @commands.guild_only()
     async def warn(self, ctx, target: discord.Member, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ You must provide visual proof attributes (a link or file upload).", ephemeral=True)
         
@@ -316,14 +350,11 @@ class AdvancedMod(commands.Cog):
             warns.append({"reason": reason, "proof": proof_data, "mod": ctx.author.id, "time": time.time()})
             total_warns = len(warns)
 
-        # FIX: Respond immediately to completely eliminate the "thinking" latency spinner
         await ctx.send(f"⚠️ {target.mention} has been logged for warning infraction #{total_warns}.")
 
-        # Send DM (with explicit user tag inside the raw content wrapper)
         embed = discord.Embed(title=f"Warning received in {ctx.guild.name}", description=f"**Reason:** {reason}\nTotal Server Infractions: {total_warns}", color=discord.Color.gold())
         await self._dm_user(target, embed, tag_user=True)
         
-        # Log and process escalation checks
         await self.log_immediate_action(ctx.guild, f"Warn (#{total_warns})", target, ctx.author, reason, proof_data)
         await self._process_warning_escalation(ctx, target)
 
@@ -353,6 +384,9 @@ class AdvancedMod(commands.Cog):
     async def unwarn(self, ctx, target: discord.Member, warning_number: int = None):
         if not await self._has_level(ctx, 2): return await ctx.send("Permission denied. Class II+ hierarchy required.", ephemeral=True)
         
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         async with self.config.member(target).warnings() as warns:
             if not warns:
                 return await ctx.send(f"**{target.display_name}** does not have any active warnings to remove.", ephemeral=True)
@@ -373,6 +407,10 @@ class AdvancedMod(commands.Cog):
     @commands.guild_only()
     async def timeout(self, ctx, target: discord.Member, minutes: int, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof missing.", ephemeral=True)
         
@@ -387,6 +425,10 @@ class AdvancedMod(commands.Cog):
     @commands.guild_only()
     async def kick(self, ctx, target: discord.Member, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
@@ -404,6 +446,10 @@ class AdvancedMod(commands.Cog):
     @commands.guild_only()
     async def ban(self, ctx, target: discord.User, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.", ephemeral=True)
+        
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
@@ -418,6 +464,10 @@ class AdvancedMod(commands.Cog):
     @commands.guild_only()
     async def strictban(self, ctx, target: discord.User, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 4): return await ctx.send("Permission denied.", ephemeral=True)
+        
+        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
+        if not allowed: return await ctx.send(error_msg, ephemeral=True)
+        
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof required.", ephemeral=True)
 
