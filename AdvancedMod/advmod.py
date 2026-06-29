@@ -17,7 +17,6 @@ class DynamicRequestView(discord.ui.View):
         guild = interaction.guild
         if not guild: return
         
-        # Look up the active request matching this specific message ID
         active_reqs = await self.cog.config.guild(guild).active_requests()
         req_id = None
         for r_id, data in active_reqs.items():
@@ -31,7 +30,6 @@ class DynamicRequestView(discord.ui.View):
         req = active_reqs[req_id]
         req_type = req["type"]
         
-        # Hierarchy Permission Enforcement Check
         if "kick" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 2):
                 return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class II+ to approve a kick request.", ephemeral=True)
@@ -42,7 +40,6 @@ class DynamicRequestView(discord.ui.View):
             if not await self.cog._has_level_member(guild, interaction.user, 5):
                 return await interaction.response.send_message("❌ Hierarchy Denied: Only Directors can approve this action.", ephemeral=True)
 
-        # Defer to allow complex task execution (kicking/banning)
         await interaction.response.defer()
 
         target_id = req["target"]
@@ -50,7 +47,6 @@ class DynamicRequestView(discord.ui.View):
         reason = f"Request {req_id} approved by {interaction.user} | Original: {req['reason']}"
         proof = req["proof"]
 
-        # Process the action
         if "kick" in req_type and isinstance(target, discord.Member):
             dm_embed = discord.Embed(title=f"Kicked from {guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
             await self.cog._dm_user(target, dm_embed)
@@ -62,11 +58,9 @@ class DynamicRequestView(discord.ui.View):
             temp = 14 if "tempban" in req_type else None
             await self.cog._process_ban(guild, target, interaction.user, reason, proof, appealable=True, temp_days=temp)
 
-        # Clear and disable buttons
         disabled_view = discord.ui.View(timeout=None)
         disabled_view.add_item(discord.ui.Button(label="Approved", style=discord.ButtonStyle.green, disabled=True))
 
-        # Turn request layout into final log
         log_embed = discord.Embed(title=f"✅ Mod Action: {req_type.title()} (Approved)", color=discord.Color.green(), timestamp=datetime.datetime.now(datetime.timezone.utc))
         log_embed.add_field(name="Target", value=f"{target.mention if hasattr(target, 'mention') else 'Unknown'} ({target_id})", inline=False)
         log_embed.add_field(name="Requested By", value=f"<@{req['author']}>", inline=True)
@@ -78,7 +72,6 @@ class DynamicRequestView(discord.ui.View):
 
         await interaction.message.edit(content=None, embed=log_embed, view=disabled_view)
 
-        # Remove from persistent database configuration
         async with self.cog.config.guild(guild).active_requests() as data:
             if req_id in data: del data[req_id]
 
@@ -117,7 +110,7 @@ class DynamicRequestView(discord.ui.View):
 
 
 class AdvancedMod(commands.Cog):
-    """Advanced Hierarchical Moderation System with Button Approvals"""
+    """Advanced Hierarchical Moderation System via Slash Commands"""
 
     def __init__(self, bot):
         self.bot = bot
@@ -146,7 +139,6 @@ class AdvancedMod(commands.Cog):
         self.appeal_notifier.start()
 
     async def cog_load(self):
-        """Registers the dynamic view to listen to incoming buttons on bot start."""
         self.bot.add_view(DynamicRequestView(self))
 
     def cog_unload(self):
@@ -173,10 +165,10 @@ class AdvancedMod(commands.Cog):
     async def _has_level(self, ctx: commands.Context, level: int) -> bool:
         return await self._has_level_member(ctx.guild, ctx.author, level)
 
-    def _get_proof(self, ctx: commands.Context, proof_text: str = None) -> str:
-        if ctx.message.attachments:
-            return ctx.message.attachments[0].url
-        return proof_text if proof_text else "None Provided"
+    def _get_proof(self, proof_link: str = None, attachment: discord.Attachment = None) -> str:
+        if attachment:
+            return attachment.url
+        return proof_link if proof_link else "None Provided"
 
     async def _dm_user(self, target: typing.Union[discord.Member, discord.User], embed: discord.Embed):
         try:
@@ -202,7 +194,7 @@ class AdvancedMod(commands.Cog):
 
         await channel.send(embed=embed)
 
-    async def create_request(self, ctx: commands.Context, req_type: str, target: discord.Member, reason: str, proof: str, ping_level: int):
+    async def create_request(self, ctx: commands.Context, req_type: str, target: typing.Union[discord.Member, discord.User], reason: str, proof: str, ping_level: int):
         channel_id = await self.config.guild(ctx.guild).mod_channel()
         if not channel_id: return await ctx.send("Mod channel not configured.")
         channel = ctx.guild.get_channel(channel_id)
@@ -227,7 +219,6 @@ class AdvancedMod(commands.Cog):
             embed.set_image(url=proof)
             embed.add_field(name="Proof Link", value=proof, inline=False)
 
-        # Attach the persistent UI view object to the message context
         msg = await channel.send(content=f"Attention required: {ping_mention}", embed=embed, view=DynamicRequestView(self))
         
         async with self.config.guild(ctx.guild).active_requests() as reqs:
@@ -272,15 +263,16 @@ class AdvancedMod(commands.Cog):
         elif action == "ban":
             await self._process_ban(ctx.guild, target, ctx.guild.me, reason, proof, appealable=True, automated=True)
 
-    # --- CONFIGURE STRATEGIES ---
-    @commands.group(name="advmodset")
+    # --- CONFIGURATION SLASH GROUP ---
+    @commands.hybrid_group(name="advmodset", description="Configure Advanced Moderation parameters.")
+    @commands.guild_only()
     @commands.admin_or_permissions(administrator=True)
     async def advmodset(self, ctx):
-        """Configure Advanced Moderation parameters."""
         pass
 
-    @advmodset.command(name="roles")
+    @advmodset.command(name="roles", description="Configure all modular security authorization roles.")
     async def set_roles(self, ctx, base: discord.Role, class1: discord.Role, class2: discord.Role, class3: discord.Role, manager: discord.Role, director: discord.Role):
+        await ctx.defer()
         await self.config.guild(ctx.guild).base_mod_role.set(base.id)
         await self.config.guild(ctx.guild).class_1_role.set(class1.id)
         await self.config.guild(ctx.guild).class_2_role.set(class2.id)
@@ -289,23 +281,21 @@ class AdvancedMod(commands.Cog):
         await self.config.guild(ctx.guild).director_role.set(director.id)
         await ctx.send("Roles successfully configured.")
 
-    @advmodset.command(name="channel")
+    @advmodset.command(name="channel", description="Set the single dedicated moderation channel for requests and logs.")
     async def set_channel(self, ctx, channel: discord.TextChannel):
+        await ctx.defer()
         await self.config.guild(ctx.guild).mod_channel.set(channel.id)
         await ctx.send(f"Unified tracking channel locked to: {channel.mention}")
 
-    @advmodset.command(name="appeallink")
+    @advmodset.command(name="appeallink", description="Set the URL link for automated ban appeal notifications.")
     async def set_appeal(self, ctx, link: str):
+        await ctx.defer()
         await self.config.guild(ctx.guild).appeal_link.set(link)
         await ctx.send(f"Appeal destination URL set to: {link}")
-        
-    @advmodset.command(name="punishment")
+
+    @advmodset.command(name="punishment", description="Configure automated thresholds (Actions: timeout, kick, ban).")
     async def set_punishment(self, ctx, warn_count: int, action: str, duration_minutes: int = None):
-        """Configure automated thresholds (Actions: timeout, kick, ban).
-        
-        Example: [p]advmodset punishment 3 timeout 60
-        Example: [p]advmodset punishment 5 kick
-        """
+        await ctx.defer()
         action = action.lower()
         if action not in ["timeout", "kick", "ban"]:
             return await ctx.send("❌ Invalid action. Please choose from: `timeout`, `kick`, or `ban`.")
@@ -317,15 +307,16 @@ class AdvancedMod(commands.Cog):
             punishments[str(warn_count)] = {"action": action, "duration": duration_minutes}
             
         duration_str = f" for {duration_minutes} minutes" if duration_minutes else ""
-        await ctx.send(f"✅ **Automated Escalation Configured:** Reaching `{warn_count}` warnings will now automatically trigger a `{action}`{duration_str}.")
+        await ctx.send(f"✅ Automated Escalation Configured: Reaching `{warn_count}` warnings will trigger a `{action}`{duration_str}.")
 
-    # --- STANDARD INTERFACE COMMANDS ---
-    @commands.command()
-    async def warn(self, ctx, target: discord.Member, reason: str, proof: str = None):
-        """[Class I+] Issue a warning record to a member."""
-        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
-        proof_data = self._get_proof(ctx, proof)
-        if proof_data == "None Provided": return await ctx.send("You must provide visual proof attributes.")
+    # --- MODERATION SLASH COMMANDS ---
+    @commands.hybrid_command(name="warn", description="[Class I+] Issue a warning record to a member.")
+    @commands.guild_only()
+    async def warn(self, ctx, target: discord.Member, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        await ctx.defer()
+        proof_data = self._get_proof(proof_link, attachment)
+        if proof_data == "None Provided": return await ctx.send("❌ You must provide visual proof attributes (a link or file upload).")
         
         async with self.config.member(target).warnings() as warns:
             warns.append({"reason": reason, "proof": proof_data, "mod": ctx.author.id, "time": time.time()})
@@ -337,12 +328,13 @@ class AdvancedMod(commands.Cog):
         await ctx.send(f"⚠️ {target.mention} has been logged for warning infraction #{total_warns}.")
         await self._process_warning_escalation(ctx, target)
 
-    @commands.command()
-    async def timeout(self, ctx, target: discord.Member, minutes: int, reason: str, proof: str = None):
-        """[Class I+] Restrict communication privileges via server isolation."""
-        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
-        proof_data = self._get_proof(ctx, proof)
-        if proof_data == "None Provided": return await ctx.send("Proof missing.")
+    @commands.hybrid_command(name="timeout", description="[Class I+] Restrict communication privileges via server isolation.")
+    @commands.guild_only()
+    async def timeout(self, ctx, target: discord.Member, minutes: int, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        await ctx.defer()
+        proof_data = self._get_proof(proof_link, attachment)
+        if proof_data == "None Provided": return await ctx.send("❌ Proof missing.")
         
         await target.timeout(datetime.timedelta(minutes=minutes), reason=reason)
         embed = discord.Embed(title=f"Timed Out in {ctx.guild.name}", description=f"Duration: {minutes} minutes\n**Reason:** {reason}", color=discord.Color.orange())
@@ -350,12 +342,13 @@ class AdvancedMod(commands.Cog):
         await self.log_immediate_action(ctx.guild, f"Timeout ({minutes}m)", target, ctx.author, reason, proof_data)
         await ctx.send(f"🔇 Isolated {target.mention} for {minutes}m.")
 
-    @commands.command()
-    async def kick(self, ctx, target: discord.Member, reason: str, proof: str = None):
-        """[Class I+] Remove a member. Auto-requests if Class I; Auto-executes if Class II+."""
-        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
-        proof_data = self._get_proof(ctx, proof)
-        if proof_data == "None Provided": return await ctx.send("Proof metadata missing.")
+    @commands.hybrid_command(name="kick", description="[Class I+] Remove a member. Auto-requests if Class I; Auto-executes if Class II+.")
+    @commands.guild_only()
+    async def kick(self, ctx, target: discord.Member, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
+        await ctx.defer()
+        proof_data = self._get_proof(proof_link, attachment)
+        if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.")
 
         if await self._has_level(ctx, 2):
             embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
@@ -366,12 +359,13 @@ class AdvancedMod(commands.Cog):
         else:
             await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2)
 
-    @commands.command()
-    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof: str = None):
-        """[Class II+] Ban a user. Auto-requests if Class II; Auto-executes if Class III+."""
-        if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.")
-        proof_data = self._get_proof(ctx, proof)
-        if proof_data == "None Provided": return await ctx.send("Proof metadata missing.")
+    @commands.hybrid_command(name="ban", description="[Class II+] Ban a user. Auto-requests if Class II; Auto-executes if Class III+.")
+    @commands.guild_only()
+    async def ban(self, ctx, target: discord.User, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.", ephemeral=True)
+        await ctx.defer()
+        proof_data = self._get_proof(proof_link, attachment)
+        if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.")
 
         if await self._has_level(ctx, 3):
             await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True)
@@ -379,12 +373,13 @@ class AdvancedMod(commands.Cog):
         else:
             await self.create_request(ctx, "permban (appealable)", target, reason, proof_data, ping_level=3)
 
-    @commands.command()
-    async def strictban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof: str = None):
-        """[Manager+] Server purge without access to general appeal pathways."""
-        if not await self._has_level(ctx, 4): return await ctx.send("Permission denied.")
-        proof_data = self._get_proof(ctx, proof)
-        if proof_data == "None Provided": return await ctx.send("Proof required.")
+    @commands.hybrid_command(name="strictban", description="[Manager+] Server purge without access to general appeal pathways.")
+    @commands.guild_only()
+    async def strictban(self, ctx, target: discord.User, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 4): return await ctx.send("Permission denied.", ephemeral=True)
+        await ctx.defer()
+        proof_data = self._get_proof(proof_link, attachment)
+        if proof_data == "None Provided": return await ctx.send("❌ Proof required.")
 
         await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=False)
         await self.create_request(ctx, "director review (strict ban)", target, reason, proof_data, ping_level=5)
