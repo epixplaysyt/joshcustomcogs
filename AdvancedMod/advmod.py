@@ -298,6 +298,26 @@ class AdvancedMod(commands.Cog):
     async def set_appeal(self, ctx, link: str):
         await self.config.guild(ctx.guild).appeal_link.set(link)
         await ctx.send(f"Appeal destination URL set to: {link}")
+        
+    @advmodset.command(name="punishment")
+    async def set_punishment(self, ctx, warn_count: int, action: str, duration_minutes: int = None):
+        """Configure automated thresholds (Actions: timeout, kick, ban).
+        
+        Example: [p]advmodset punishment 3 timeout 60
+        Example: [p]advmodset punishment 5 kick
+        """
+        action = action.lower()
+        if action not in ["timeout", "kick", "ban"]:
+            return await ctx.send("❌ Invalid action. Please choose from: `timeout`, `kick`, or `ban`.")
+            
+        if action == "timeout" and not duration_minutes:
+            return await ctx.send("❌ You must specify a duration in minutes for a timeout punishment.")
+            
+        async with self.config.guild(ctx.guild).punishments() as punishments:
+            punishments[str(warn_count)] = {"action": action, "duration": duration_minutes}
+            
+        duration_str = f" for {duration_minutes} minutes" if duration_minutes else ""
+        await ctx.send(f"✅ **Automated Escalation Configured:** Reaching `{warn_count}` warnings will now automatically trigger a `{action}`{duration_str}.")
 
     # --- STANDARD INTERFACE COMMANDS ---
     @commands.command()
