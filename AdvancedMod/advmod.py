@@ -1,0 +1,422 @@
+import discord
+from redbot.core import commands, Config
+from discord.ext import tasks
+import datetime
+import time
+import uuid
+import typing
+
+class DynamicRequestView(discord.ui.View):
+    """Global persistent view to handle all mod button requests across restarts."""
+    def __init__(self, cog):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.green, custom_id="advmod:approve")
+    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        if not guild: return
+        
+        # Look up the active request matching this specific message ID
+        active_reqs = await self.cog.config.guild(guild).active_requests()
+        req_id = None
+        for r_id, data in active_reqs.items():
+            if data["message_id"] == interaction.message.id:
+                req_id = r_id
+                break
+                
+        if not req_id:
+            return await interaction.response.send_message("This request is expired, invalid, or has already been processed.", ephemeral=True)
+            
+        req = active_reqs[req_id]
+        req_type = req["type"]
+        
+        # Hierarchy Permission Enforcement Check
+        if "kick" in req_type:
+            if not await self.cog._has_level_member(guild, interaction.user, 2):
+                return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class II+ to approve a kick request.", ephemeral=True)
+        elif "permban" in req_type:
+            if not await self.cog._has_level_member(guild, interaction.user, 3):
+                return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class III+ to approve a ban request.", ephemeral=True)
+        elif "review" in req_type:
+            if not await self.cog._has_level_member(guild, interaction.user, 5):
+                return await interaction.response.send_message("❌ Hierarchy Denied: Only Directors can approve this action.", ephemeral=True)
+
+        # Defer to allow complex task execution (kicking/banning)
+        await interaction.response.defer()
+
+        target_id = req["target"]
+        target = guild.get_member(target_id) or self.cog.bot.get_user(target_id)
+        reason = f"Request {req_id} approved by {interaction.user} | Original: {req['reason']}"
+        proof = req["proof"]
+
+        # Process the action
+        if "kick" in req_type and isinstance(target, discord.Member):
+            dm_embed = discord.Embed(title=f"Kicked from {guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
+            await self.cog._dm_user(target, dm_embed)
+            try:
+                await target.kick(reason=reason)
+            except discord.HTTPException:
+                pass
+        elif "ban" in req_type:
+            temp = 14 if "tempban" in req_type else None
+            await self.cog._process_ban(guild, target, interaction.user, reason, proof, appealable=True, temp_days=temp)
+
+        # Clear and disable buttons
+        disabled_view = discord.ui.View(timeout=None)
+        disabled_view.add_item(discord.ui.Button(label="Approved", style=discord.ButtonStyle.green, disabled=True))
+
+        # Turn request layout into final log
+        log_embed = discord.Embed(title=f"✅ Mod Action: {req_type.title()} (Approved)", color=discord.Color.green(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        log_embed.add_field(name="Target", value=f"{target.mention if hasattr(target, 'mention') else 'Unknown'} ({target_id})", inline=False)
+        log_embed.add_field(name="Requested By", value=f"<@{req['author']}>", inline=True)
+        log_embed.add_field(name="Approved By", value=interaction.user.mention, inline=True)
+        log_embed.add_field(name="Reason", value=reason, inline=False)
+        if proof and proof != "None Provided":
+            log_embed.set_image(url=proof)
+            log_embed.add_field(name="Proof Link", value=proof, inline=False)
+
+        await interaction.message.edit(content=None, embed=log_embed, view=disabled_view)
+
+        # Remove from persistent database configuration
+        async with self.cog.config.guild(guild).active_requests() as data:
+            if req_id in data: del data[req_id]
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="advmod:deny")
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        if not guild: return
+        
+        if not await self.cog._has_level_member(guild, interaction.user, 2):
+            return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class II+ to deny requests.", ephemeral=True)
+            
+        active_reqs = await self.cog.config.guild(guild).active_requests()
+        req_id = None
+        for r_id, data in active_reqs.items():
+            if data["message_id"] == interaction.message.id:
+                req_id = r_id
+                break
+                
+        if not req_id:
+            return await interaction.response.send_message("This request has already been processed.", ephemeral=True)
+
+        req = active_reqs[req_id]
+        
+        disabled_view = discord.ui.View(timeout=None)
+        disabled_view.add_item(discord.ui.Button(label="Denied", style=discord.ButtonStyle.danger, disabled=True))
+
+        deny_embed = discord.Embed(title=f"❌ Mod Request: {req['type'].title()} (Denied)", color=discord.Color.greyple(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        deny_embed.add_field(name="Target ID", value=str(req['target']), inline=False)
+        deny_embed.add_field(name="Requested By", value=f"<@{req['author']}>", inline=True)
+        deny_embed.add_field(name="Denied By", value=interaction.user.mention, inline=True)
+        
+        await interaction.response.edit_message(content=None, embed=deny_embed, view=disabled_view)
+
+        async with self.cog.config.guild(guild).active_requests() as data:
+            if req_id in data: del data[req_id]
+
+
+class AdvancedMod(commands.Cog):
+    """Advanced Hierarchical Moderation System with Button Approvals"""
+
+    def __init__(self, bot):
+        self.bot = bot
+        self.config = Config.get_conf(self, identifier=9485739485, force_registration=True)
+        
+        default_guild = {
+            "mod_channel": None,
+            "appeal_link": None,
+            "base_mod_role": None,
+            "class_1_role": None,
+            "class_2_role": None,
+            "class_3_role": None,
+            "manager_role": None,
+            "director_role": None,
+            "pending_appeals": [],      
+            "active_requests": {},     
+            "punishments": {           
+                "3": {"action": "timeout", "duration": 60},   
+                "5": {"action": "kick", "duration": None}     
+            }
+        }
+        default_member = {"warnings": []}
+        
+        self.config.register_guild(**default_guild)
+        self.config.register_member(**default_member)
+        self.appeal_notifier.start()
+
+    async def cog_load(self):
+        """Registers the dynamic view to listen to incoming buttons on bot start."""
+        self.bot.add_view(DynamicRequestView(self))
+
+    def cog_unload(self):
+        self.appeal_notifier.cancel()
+
+    # --- HIERARCHY PERMISSION CHECKERS ---
+    async def _has_level_member(self, guild: discord.Guild, member: discord.Member, level: int) -> bool:
+        if member.guild_permissions.administrator:
+            return True
+            
+        roles = await self.config.guild(guild).all()
+        user_role_ids = [r.id for r in member.roles]
+        
+        levels = {
+            1: [roles["class_1_role"], roles["class_2_role"], roles["class_3_role"], roles["manager_role"], roles["director_role"]],
+            2: [roles["class_2_role"], roles["class_3_role"], roles["manager_role"], roles["director_role"]],
+            3: [roles["class_3_role"], roles["manager_role"], roles["director_role"]],
+            4: [roles["manager_role"], roles["director_role"]],
+            5: [roles["director_role"]]
+        }
+        allowed_roles = [r for r in levels[level] if r is not None]
+        return any(role_id in allowed_roles for role_id in user_role_ids)
+
+    async def _has_level(self, ctx: commands.Context, level: int) -> bool:
+        return await self._has_level_member(ctx.guild, ctx.author, level)
+
+    def _get_proof(self, ctx: commands.Context, proof_text: str = None) -> str:
+        if ctx.message.attachments:
+            return ctx.message.attachments[0].url
+        return proof_text if proof_text else "None Provided"
+
+    async def _dm_user(self, target: typing.Union[discord.Member, discord.User], embed: discord.Embed):
+        try:
+            await target.send(embed=embed)
+        except discord.Forbidden:
+            pass
+
+    # --- ACTION LOGGING ---
+    async def log_immediate_action(self, guild: discord.Guild, action: str, target: typing.Union[discord.Member, discord.User], moderator: discord.Member, reason: str, proof: str):
+        channel_id = await self.config.guild(guild).mod_channel()
+        if not channel_id: return
+        channel = guild.get_channel(channel_id)
+        if not channel: return
+
+        embed = discord.Embed(title=f"⚡ Mod Action: {action}", color=discord.Color.red(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
+        embed.add_field(name="Moderator", value=f"{moderator.mention} ({moderator.id})", inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        
+        if proof and proof != "None Provided":
+            embed.set_image(url=proof)
+            embed.add_field(name="Proof Link", value=proof, inline=False)
+
+        await channel.send(embed=embed)
+
+    async def create_request(self, ctx: commands.Context, req_type: str, target: discord.Member, reason: str, proof: str, ping_level: int):
+        channel_id = await self.config.guild(ctx.guild).mod_channel()
+        if not channel_id: return await ctx.send("Mod channel not configured.")
+        channel = ctx.guild.get_channel(channel_id)
+        if not channel: return
+
+        req_id = str(uuid.uuid4())[:8]
+        roles = await self.config.guild(ctx.guild).all()
+        
+        ping_role_id = None
+        if ping_level == 2: ping_role_id = roles["class_2_role"]
+        elif ping_level == 3: ping_role_id = roles["class_3_role"]
+        elif ping_level == 5: ping_role_id = roles["director_role"]
+        
+        ping_mention = f"<@&{ping_role_id}>" if ping_role_id else "Administrators"
+
+        embed = discord.Embed(title=f"⏳ Pending Request: {req_type.title()}", description=f"ID: `{req_id}`\nReview the details below and select an action.", color=discord.Color.orange())
+        embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
+        embed.add_field(name="Requested By", value=ctx.author.mention, inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        
+        if proof and proof != "None Provided":
+            embed.set_image(url=proof)
+            embed.add_field(name="Proof Link", value=proof, inline=False)
+
+        # Attach the persistent UI view object to the message context
+        msg = await channel.send(content=f"Attention required: {ping_mention}", embed=embed, view=DynamicRequestView(self))
+        
+        async with self.config.guild(ctx.guild).active_requests() as reqs:
+            reqs[req_id] = {
+                "type": req_type,
+                "target": target.id,
+                "author": ctx.author.id,
+                "reason": reason,
+                "proof": proof,
+                "message_id": msg.id
+            }
+        
+        await ctx.send(f"Request `{req_id}` successfully routed to the tracking channel.")
+
+    # --- ESCALATION MATRICES ---
+    async def _process_warning_escalation(self, ctx: commands.Context, target: discord.Member):
+        warns = await self.config.member(target).warnings()
+        warn_count = len(warns)
+        punishments = await self.config.guild(ctx.guild).punishments()
+        
+        if str(warn_count) not in punishments: return
+
+        punishment = punishments[str(warn_count)]
+        action = punishment["action"]
+        duration = punishment["duration"]
+        reason = f"Automated Escalation: Reached {warn_count} warnings."
+        proof = warns[-1]["proof"]
+
+        if action == "timeout":
+            time_delta = datetime.timedelta(minutes=duration)
+            await target.timeout(time_delta, reason=reason)
+            dm_embed = discord.Embed(title=f"Automated Timeout: {ctx.guild.name}", description=f"You have been timed out for {duration} minutes.\n**Reason:** {reason}", color=discord.Color.orange())
+            await self._dm_user(target, dm_embed)
+            await self.log_immediate_action(ctx.guild, f"Auto-Timeout ({duration}m)", target, ctx.guild.me, reason, proof)
+
+        elif action == "kick":
+            dm_embed = discord.Embed(title=f"Automated Kick: {ctx.guild.name}", description=f"You have been kicked.\n**Reason:** {reason}", color=discord.Color.red())
+            await self._dm_user(target, dm_embed)
+            await target.kick(reason=reason)
+            await self.log_immediate_action(ctx.guild, "Auto-Kick", target, ctx.guild.me, reason, proof)
+
+        elif action == "ban":
+            await self._process_ban(ctx.guild, target, ctx.guild.me, reason, proof, appealable=True, automated=True)
+
+    # --- CONFIGURE STRATEGIES ---
+    @commands.group(name="advmodset")
+    @commands.admin_or_permissions(administrator=True)
+    async def advmodset(self, ctx):
+        """Configure Advanced Moderation parameters."""
+        pass
+
+    @advmodset.command(name="roles")
+    async def set_roles(self, ctx, base: discord.Role, class1: discord.Role, class2: discord.Role, class3: discord.Role, manager: discord.Role, director: discord.Role):
+        await self.config.guild(ctx.guild).base_mod_role.set(base.id)
+        await self.config.guild(ctx.guild).class_1_role.set(class1.id)
+        await self.config.guild(ctx.guild).class_2_role.set(class2.id)
+        await self.config.guild(ctx.guild).class_3_role.set(class3.id)
+        await self.config.guild(ctx.guild).manager_role.set(manager.id)
+        await self.config.guild(ctx.guild).director_role.set(director.id)
+        await ctx.send("Roles successfully configured.")
+
+    @advmodset.command(name="channel")
+    async def set_channel(self, ctx, channel: discord.TextChannel):
+        await self.config.guild(ctx.guild).mod_channel.set(channel.id)
+        await ctx.send(f"Unified tracking channel locked to: {channel.mention}")
+
+    @advmodset.command(name="appeallink")
+    async def set_appeal(self, ctx, link: str):
+        await self.config.guild(ctx.guild).appeal_link.set(link)
+        await ctx.send(f"Appeal destination URL set to: {link}")
+
+    # --- STANDARD INTERFACE COMMANDS ---
+    @commands.command()
+    async def warn(self, ctx, target: discord.Member, reason: str, proof: str = None):
+        """[Class I+] Issue a warning record to a member."""
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
+        proof_data = self._get_proof(ctx, proof)
+        if proof_data == "None Provided": return await ctx.send("You must provide visual proof attributes.")
+        
+        async with self.config.member(target).warnings() as warns:
+            warns.append({"reason": reason, "proof": proof_data, "mod": ctx.author.id, "time": time.time()})
+            total_warns = len(warns)
+
+        embed = discord.Embed(title=f"Warning received in {ctx.guild.name}", description=f"**Reason:** {reason}\nTotal Server Infractions: {total_warns}", color=discord.Color.gold())
+        await self._dm_user(target, embed)
+        await self.log_immediate_action(ctx.guild, f"Warn (#{total_warns})", target, ctx.author, reason, proof_data)
+        await ctx.send(f"⚠️ {target.mention} has been logged for warning infraction #{total_warns}.")
+        await self._process_warning_escalation(ctx, target)
+
+    @commands.command()
+    async def timeout(self, ctx, target: discord.Member, minutes: int, reason: str, proof: str = None):
+        """[Class I+] Restrict communication privileges via server isolation."""
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
+        proof_data = self._get_proof(ctx, proof)
+        if proof_data == "None Provided": return await ctx.send("Proof missing.")
+        
+        await target.timeout(datetime.timedelta(minutes=minutes), reason=reason)
+        embed = discord.Embed(title=f"Timed Out in {ctx.guild.name}", description=f"Duration: {minutes} minutes\n**Reason:** {reason}", color=discord.Color.orange())
+        await self._dm_user(target, embed)
+        await self.log_immediate_action(ctx.guild, f"Timeout ({minutes}m)", target, ctx.author, reason, proof_data)
+        await ctx.send(f"🔇 Isolated {target.mention} for {minutes}m.")
+
+    @commands.command()
+    async def kick(self, ctx, target: discord.Member, reason: str, proof: str = None):
+        """[Class I+] Remove a member. Auto-requests if Class I; Auto-executes if Class II+."""
+        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.")
+        proof_data = self._get_proof(ctx, proof)
+        if proof_data == "None Provided": return await ctx.send("Proof metadata missing.")
+
+        if await self._has_level(ctx, 2):
+            embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
+            await self._dm_user(target, embed)
+            await target.kick(reason=reason)
+            await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data)
+            await ctx.send(f"👢 Removed {target.mention} from server space.")
+        else:
+            await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2)
+
+    @commands.command()
+    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof: str = None):
+        """[Class II+] Ban a user. Auto-requests if Class II; Auto-executes if Class III+."""
+        if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.")
+        proof_data = self._get_proof(ctx, proof)
+        if proof_data == "None Provided": return await ctx.send("Proof metadata missing.")
+
+        if await self._has_level(ctx, 3):
+            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True)
+            await ctx.send(f"🔨 Permanently restricted network access for {target}.")
+        else:
+            await self.create_request(ctx, "permban (appealable)", target, reason, proof_data, ping_level=3)
+
+    @commands.command()
+    async def strictban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof: str = None):
+        """[Manager+] Server purge without access to general appeal pathways."""
+        if not await self._has_level(ctx, 4): return await ctx.send("Permission denied.")
+        proof_data = self._get_proof(ctx, proof)
+        if proof_data == "None Provided": return await ctx.send("Proof required.")
+
+        await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=False)
+        await self.create_request(ctx, "director review (strict ban)", target, reason, proof_data, ping_level=5)
+        await ctx.send(f"⛔ Executed strict ban on {target}. Forwarded context to Directors.")
+
+    # --- ATOMIC INTERNAL MOD HANDLERS ---
+    async def _process_ban(self, guild: discord.Guild, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, appealable: bool, temp_days: int = None, automated: bool = False):
+        desc = f"**Reason:** {reason}"
+        if temp_days: desc = f"**Duration:** {temp_days} Days\n" + desc
+        embed = discord.Embed(title=f"Banned from {guild.name}", description=desc, color=discord.Color.dark_red())
+        
+        if appealable:
+            embed.add_field(name="Appeals", value="This restriction is appealable. You will receive an access form via DM in 14 days.")
+            async with self.config.guild(guild).pending_appeals() as appeals_list:
+                appeals_list.append({"user_id": target.id, "timestamp": time.time()})
+        else:
+            embed.add_field(name="Appeals", value="This execution type is strict and unappealable.")
+
+        await self._dm_user(target, embed)
+        await guild.ban(target, reason=reason)
+        
+        log_type = "Auto-Ban" if automated else ("Ban (Appealable)" if appealable else "Strict Ban")
+        await self.log_immediate_action(guild, log_type, target, moderator, reason, proof)
+
+    # --- 14-DAY RECURSIVE CHECK SYSTEM ---
+    @tasks.loop(hours=24)
+    async def appeal_notifier(self):
+        current_time = time.time()
+        fourteen_days = 14 * 24 * 60 * 60
+
+        for guild_id in await self.config.all_guilds():
+            guild = self.bot.get_guild(guild_id)
+            if not guild: continue
+            appeal_link = await self.config.guild(guild).appeal_link()
+            if not appeal_link: continue
+
+            async with self.config.guild(guild).pending_appeals() as appeals_list:
+                to_remove = []
+                for appeal in appeals_list:
+                    if current_time - appeal["timestamp"] >= fourteen_days:
+                        user = self.bot.get_user(appeal["user_id"])
+                        if user:
+                            embed = discord.Embed(
+                                title=f"Appeal Access Window Opened: {guild.name}", 
+                                description=f"Your 14-day ban hold time has ended. You may submit an appeal using this portal link:\n\n[Open Appeal Submission Form]({appeal_link})",
+                                color=discord.Color.green()
+                            )
+                            await self._dm_user(user, embed)
+                        to_remove.append(appeal)
+                for item in to_remove:
+                    appeals_list.remove(item)
+
+    @appeal_notifier.before_loop
+    async def before_appeal_notifier(self):
+        await self.bot.wait_until_red_ready()
