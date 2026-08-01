@@ -1,4 +1,4 @@
-from .scoremailer import ScoreMailer
+from .appreader import ScoreMailer
 
 async def setup(bot):
     await bot.add_cog(ScoreMailer(bot))
