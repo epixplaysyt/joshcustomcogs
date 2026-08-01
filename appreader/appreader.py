@@ -6,6 +6,23 @@ from redbot.core import Config, commands
 from redbot.core.utils.predicates import MessagePredicate
 from redbot.core.utils.chat_formatting import pagify
 
+def round_score(val):
+    if not val:
+        return val
+    val_str = str(val).strip()
+    if "/" in val_str:
+        parts = val_str.split("/")
+        try:
+            num = round(float(parts[0].strip()))
+            return f"{num} / {parts[1].strip()}"
+        except ValueError:
+            return val_str
+    else:
+        try:
+            return str(round(float(val_str)))
+        except ValueError:
+            return val_str
+
 def has_app_role():
     async def predicate(ctx):
         if await ctx.bot.is_owner(ctx.author):
@@ -55,7 +72,7 @@ class AppReaderView(discord.ui.View):
             
         app = self.applications[self.current_index]
         username = app["discord_username"]
-        score = app["total_score"]
+        score = round_score(app["total_score"])
         
         if not username or not score:
             return await interaction.response.send_message("This application is missing a valid Discord Username or Total Score.", ephemeral=True)
@@ -88,13 +105,13 @@ class AppReaderView(discord.ui.View):
         if app["discord_username"]:
             embed.set_author(name=f"User: {app['discord_username']}")
         if app["total_score"]:
-            embed.title += f" | Total Score: {app['total_score']}"
+            embed.title += f" | Total Score: {round_score(app['total_score'])}"
         
         description = ""
         for item in app["q_and_a"]:
             q = item["question"]
             a = item["answer"]
-            s = item["score"]
+            s = round_score(item["score"])
             f = item["feedback"]
             
             if not a and not s and not f:
@@ -279,7 +296,7 @@ class ScoreMailer(commands.Cog):
                 continue
                 
             username = row[discord_col].strip()
-            score = row[score_col].strip()
+            score = round_score(row[score_col].strip())
             
             if not username or not score or username.lower() in ["username", "user", "name"] or score.lower() in ["score", "result"]:
                 continue
