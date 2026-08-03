@@ -104,7 +104,7 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "👷 Developing new updates..."
+            "🔒 Secure and encrypted log archives"
         ]
         self.status_index = 0
         
@@ -164,6 +164,37 @@ class Modmail(commands.Cog):
             stats[department][f'{prefix}_avg'] = new_avg
             stats[department][f'{prefix}_count'] = new_count
 
+    async def _get_reply_context(self, message: discord.Message):
+        if not message.reference:
+            return None, None
+        
+        ref_msg = message.reference.resolved
+        if not isinstance(ref_msg, discord.Message):
+            try:
+                ref_msg = await message.channel.fetch_message(message.reference.message_id)
+            except Exception:
+                return None, None
+        
+        if not ref_msg:
+            return None, None
+
+        author_name = ref_msg.author.name
+        if ref_msg.author.bot and ref_msg.embeds:
+            embed_obj = ref_msg.embeds[0]
+            if embed_obj.author and embed_obj.author.name:
+                author_name = embed_obj.author.name
+
+        content = ref_msg.content
+        if not content and ref_msg.embeds and ref_msg.embeds[0].description:
+            content = ref_msg.embeds[0].description
+        if not content:
+            content = "*[Attachment/Media]*"
+
+        if len(content) > 150:
+            content = content[:147] + "..."
+
+        return author_name, content
+
     @tasks.loop(seconds=30)
     async def presence_loop(self):
         default_guild_id = await self.config.default_guild_id()
@@ -190,6 +221,68 @@ class Modmail(commands.Cog):
     @presence_loop.before_loop
     async def before_presence_loop(self):
         await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_typing(self, channel, user, when):
+        if user.bot:
+            return
+        if isinstance(channel, discord.DMChannel):
+            active_channel_id = await self.config.user(user).active_channel_id()
+            if active_channel_id:
+                ticket_channel = self.bot.get_channel(active_channel_id)
+                if ticket_channel:
+                    await ticket_channel.typing()
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        if payload.user_id == self.bot.user.id:
+            return
+
+        if payload.guild_id is None:
+            active_channel_id = await self.config.user_from_id(payload.user_id).active_channel_id()
+            if active_channel_id:
+                ticket_channel = self.bot.get_channel(active_channel_id)
+                if ticket_channel:
+                    user = self.bot.get_user(payload.user_id)
+                    username = user.name if user else "User"
+                    emoji_str = str(payload.emoji)
+                    
+                    embed = discord.Embed(
+                        description=f"Reacted with {emoji_str}",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    embed.set_author(name=f"{username}", icon_url=user.display_avatar.url if user else None)
+                    await ticket_channel.send(embed=embed)
+
+        else:
+            owner_id = await self.config.channel_from_id(payload.channel_id).owner_id()
+            if owner_id:
+                user = self.bot.get_user(owner_id)
+                if user:
+                    guild = self.bot.get_guild(payload.guild_id)
+                    member = payload.member or (guild.get_member(payload.user_id) if guild else None)
+                    if member and member.bot:
+                        return
+                    
+                    role_name = member.top_role.name if member else "Staff"
+                    emoji_str = str(payload.emoji)
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
+                    ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
+
+                    embed = discord.Embed(
+                        description=f"Reacted with {emoji_str}",
+                        color=discord.Color.green(),
+                        timestamp=now
+                    )
+                    embed.set_author(name=member.name if member else "Staff", icon_url=member.display_avatar.url if member else None)
+                    embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                    
+                    try:
+                        await user.send(embed=embed)
+                    except discord.Forbidden:
+                        pass
 
     async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general"):
         departments = await self.config.guild(guild).departments()
@@ -419,11 +512,16 @@ class Modmail(commands.Cog):
                 role_name = member.top_role.name if member else "User"
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
 
+                reply_author, reply_text = await self._get_reply_context(message)
+
                 files = [await a.to_file() for a in message.attachments]
                 embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
                 embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
                 embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
+                if reply_author and reply_text:
+                    embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
+
                 await channel.send(embed=embed, files=files)
                 await message.add_reaction("✅")
             else:
@@ -468,11 +566,16 @@ class Modmail(commands.Cog):
                             ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
                             date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                             
+                            reply_author, reply_text = await self._get_reply_context(message)
+
                             files = [await a.to_file() for a in message.attachments]
                             embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
                             embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
                             embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                             
+                            if reply_author and reply_text:
+                                embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
+
                             await channel.send(embed=embed, files=files)
                             await message.add_reaction("✅")
                     except Exception as e:
@@ -522,12 +625,17 @@ class Modmail(commands.Cog):
                 role_name = member.top_role.name if member else "Staff"
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
 
+                reply_author, reply_text = await self._get_reply_context(message)
+
                 try:
                     files_for_user = [await a.to_file() for a in message.attachments]
                     files_for_channel = [await a.to_file() for a in message.attachments]
 
                     user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
                     
+                    if reply_author and reply_text:
+                        user_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
+
                     if is_anon:
                         guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
                         user_embed.set_author(name="Support Team", icon_url=guild_icon)
@@ -543,6 +651,8 @@ class Modmail(commands.Cog):
                         chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey(), timestamp=now)
                         chan_embed.set_author(name=f"[Anonymous] {message.author.name}", icon_url=message.author.display_avatar.url)
                         chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
+                        if reply_author and reply_text:
+                            chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
                         await message.channel.send(embed=chan_embed, files=files_for_channel)
                     else:
                         await message.add_reaction("📤")
@@ -673,7 +783,9 @@ class Modmail(commands.Cog):
         await self.config.guild(ctx.guild).busy_mode.set(new_state)
         
         if new_state:
-            await ctx.send("🚨 **Busy mode has been ENABLED.**")
+            await ctx.send("🚨 **Busy mode has been ENABLED.**\n"
+                           "* The bot status is now overridden to **Do Not Disturb**.\n"
+                           "* New ticket owners will receive a dynamic high-volume warning embed field.")
         else:
             await ctx.send("✅ **Busy mode has been DISABLED.** Normal scheduling operations resumed.")
 
