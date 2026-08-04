@@ -48,6 +48,14 @@ class AppReaderView(discord.ui.View):
     def update_buttons(self):
         self.children[0].disabled = (self.current_index == 0)
         self.children[1].disabled = (self.current_index == len(self.applications) - 1)
+        
+        app = self.applications[self.current_index]
+        if self.ctx.author.id in app["votes"]:
+            self.children[2].style = discord.ButtonStyle.success
+            self.children[2].label = "Voted to Proceed ✅"
+        else:
+            self.children[2].style = discord.ButtonStyle.secondary
+            self.children[2].label = "Vote to Proceed"
 
     @discord.ui.button(style=discord.ButtonStyle.primary, emoji="⬅️", custom_id="prev_app")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -62,6 +70,30 @@ class AppReaderView(discord.ui.View):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
         self.current_index += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(style=discord.ButtonStyle.secondary, label="Vote to Proceed", emoji="🗳️", custom_id="vote_app")
+    async def vote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
+            
+        app = self.applications[self.current_index]
+        guild_data = self.cog.server_data.get(self.ctx.guild.id)
+        if not guild_data:
+            return await interaction.response.send_message("Data for this server is no longer available.", ephemeral=True)
+            
+        max_votes = guild_data.get("max_candidates", 0)
+        user_id = interaction.user.id
+        
+        if user_id in app["votes"]:
+            app["votes"].remove(user_id)
+        else:
+            current_votes = sum(1 for a in guild_data["apps"] if user_id in a["votes"])
+            if current_votes >= max_votes:
+                return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes.", ephemeral=True)
+            app["votes"].add(user_id)
+            
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
@@ -165,7 +197,10 @@ class ScoreMailer(commands.Cog):
     @commands.command()
     @commands.guild_only()
     @has_app_role()
-    async def uploadapps(self, ctx):
+    async def uploadapps(self, ctx, max_candidates: int):
+        if max_candidates <= 0:
+            return await ctx.send("The maximum number of candidates must be at least 1.")
+            
         if not ctx.message.attachments:
             return await ctx.send("Please attach a `.csv` file to your message.")
 
@@ -236,7 +271,8 @@ class ScoreMailer(commands.Cog):
                 applications.append({
                     "discord_username": discord_username,
                     "total_score": total_score,
-                    "q_and_a": app_data
+                    "q_and_a": app_data,
+                    "votes": set()
                 })
                 
         if not applications:
@@ -244,24 +280,67 @@ class ScoreMailer(commands.Cog):
 
         self.server_data[ctx.guild.id] = {
             "apps": applications,
-            "csv_text": text
+            "csv_text": text,
+            "max_candidates": max_candidates
         }
-        await ctx.send(f"Successfully loaded {len(applications)} applications for this server.")
+        await ctx.send(f"Successfully loaded {len(applications)} applications. Readers can vote for up to {max_candidates} candidates to proceed.")
 
     @commands.command()
     @commands.guild_only()
     @has_app_role()
-    async def readapps(self, ctx):
+    async def readapps(self, ctx, sort: str = None):
         guild_data = self.server_data.get(ctx.guild.id)
         if not guild_data or not guild_data.get("apps"):
             return await ctx.send("No applications have been uploaded for this server yet.")
 
-        view = AppReaderView(guild_data["apps"], ctx, self)
+        apps_to_read = list(guild_data["apps"])
+
+        if sort and sort.lower() in ["score", "highest", "best"]:
+            def get_sort_score(app):
+                val = app["total_score"]
+                if not val:
+                    return -9999.0
+                try:
+                    if "/" in str(val):
+                        return float(str(val).split("/")[0].strip())
+                    return float(str(val).strip())
+                except ValueError:
+                    return -9999.0
+
+            apps_to_read.sort(key=get_sort_score, reverse=True)
+
+        view = AppReaderView(apps_to_read, ctx, self)
         try:
             await ctx.author.send(embed=view.get_embed(), view=view)
             await ctx.message.add_reaction("✅")
         except discord.Forbidden:
             await ctx.send("I cannot DM you. Please make sure your server DMs are turned on.")
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def rankcandidates(self, ctx):
+        guild_data = self.server_data.get(ctx.guild.id)
+        if not guild_data or not guild_data.get("apps"):
+            return await ctx.send("No applications have been uploaded for this server yet.")
+
+        apps = guild_data["apps"]
+        ranked_apps = [app for app in apps if len(app["votes"]) > 0]
+        
+        if not ranked_apps:
+            return await ctx.send("No votes have been cast yet.")
+            
+        ranked_apps.sort(key=lambda x: len(x["votes"]), reverse=True)
+        
+        lines = ["### 🏆 **Candidate Rankings (Voted to Proceed)**"]
+        for i, app in enumerate(ranked_apps, 1):
+            username = app["discord_username"] or "Unknown User"
+            votes = len(app["votes"])
+            lines.append(f"**{i}.** {username} — **{votes}** vote(s)")
+            
+        text = "\n".join(lines)
+        for page in pagify(text):
+            await ctx.send(page)
 
     @commands.command()
     @commands.guild_only()
