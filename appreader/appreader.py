@@ -176,7 +176,9 @@ class ScoreMailer(commands.Cog):
         self.config = Config.get_conf(self, identifier=823479234823, force_registration=True)
         self.config.register_guild(
             allowed_role_id=None,
-            custom_dm_message="Congratulations for completing the tester application! This score is only part of your application."
+            custom_dm_message="Congratulations for completing the tester application! This score is only part of your application.",
+            custom_success_message="Congratulations! Your application has been successful and you will proceed to the next stage.",
+            custom_fail_message="Unfortunately, your application was not successful this time. Thank you for your interest."
         )
         self.server_data = {}
 
@@ -192,7 +194,21 @@ class ScoreMailer(commands.Cog):
     @has_app_role()
     async def setdmmsg(self, ctx, *, message: str):
         await self.config.guild(ctx.guild).custom_dm_message.set(message)
-        await ctx.send(f"✅ The custom DM message has been updated to:\n> {message}")
+        await ctx.send(f"✅ The custom score DM message has been updated to:\n> {message}")
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def setsuccessmsg(self, ctx, *, message: str):
+        await self.config.guild(ctx.guild).custom_success_message.set(message)
+        await ctx.send(f"✅ The custom successful candidate DM message has been updated to:\n> {message}")
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def setfailmsg(self, ctx, *, message: str):
+        await self.config.guild(ctx.guild).custom_fail_message.set(message)
+        await ctx.send(f"✅ The custom failed candidate DM message has been updated to:\n> {message}")
 
     @commands.command()
     @commands.guild_only()
@@ -281,7 +297,8 @@ class ScoreMailer(commands.Cog):
         self.server_data[ctx.guild.id] = {
             "apps": applications,
             "csv_text": text,
-            "max_candidates": max_candidates
+            "max_candidates": max_candidates,
+            "manual_success": set()
         }
         await ctx.send(f"Successfully loaded {len(applications)} applications. Readers can vote for up to {max_candidates} candidates to proceed.")
 
@@ -336,11 +353,171 @@ class ScoreMailer(commands.Cog):
         for i, app in enumerate(ranked_apps, 1):
             username = app["discord_username"] or "Unknown User"
             votes = len(app["votes"])
-            lines.append(f"**{i}.** {username} — **{votes}** vote(s)")
+            
+            member = ctx.guild.get_member_named(username)
+            if member:
+                status = f"✅ `ID: {member.id}`"
+            else:
+                status = "❌ `Not found in server`"
+                
+            lines.append(f"**{i}.** {username} — **{votes}** vote(s) | {status}")
             
         text = "\n".join(lines)
         for page in pagify(text):
             await ctx.send(page)
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def addsuccess(self, ctx, *, username: str):
+        guild_data = self.server_data.get(ctx.guild.id)
+        if not guild_data:
+            return await ctx.send("No applications have been uploaded for this server yet.")
+            
+        guild_data["manual_success"].add(username.lower())
+        await ctx.send(f"✅ **{username}** has been manually added to the successful candidates list.")
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def removesuccess(self, ctx, *, username: str):
+        guild_data = self.server_data.get(ctx.guild.id)
+        if not guild_data:
+            return await ctx.send("No applications have been uploaded for this server yet.")
+            
+        manual = guild_data["manual_success"]
+        if username.lower() in manual:
+            manual.remove(username.lower())
+            await ctx.send(f"✅ **{username}** has been removed from the manual successful candidates list.")
+        else:
+            await ctx.send(f"❌ **{username}** is not in the manual successful candidates list.")
+
+    @commands.command()
+    @commands.guild_only()
+    @has_app_role()
+    async def mailresults(self, ctx):
+        guild_data = self.server_data.get(ctx.guild.id)
+        if not guild_data or not guild_data.get("apps"):
+            return await ctx.send("No applications have been uploaded for this server yet.")
+
+        role_id = await self.config.guild(ctx.guild).allowed_role_id()
+        if not role_id:
+            return await ctx.send("The application reader role hasn't been set up yet. Use `setapprole`.")
+            
+        role = ctx.guild.get_role(role_id)
+        if not role:
+            return await ctx.send("The configured reader role no longer exists in this server.")
+
+        readers = [m for m in role.members if not m.bot]
+        reader_count = len(readers)
+        
+        if reader_count == 0:
+            await ctx.send("⚠️ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
+
+        apps = guild_data["apps"]
+        manual_success = guild_data.get("manual_success", set())
+        
+        successful_dms = []
+        failed_dms = []
+        not_found = []
+
+        # Categorize candidates
+        for app in apps:
+            username = app["discord_username"].strip()
+            if not username or username.lower() in ["username", "user", "name"]:
+                continue
+                
+            member = ctx.guild.get_member_named(username)
+            if not member:
+                not_found.append(username)
+                continue
+                
+            # Check success condition (unanimous vote OR manual override)
+            is_successful = False
+            if reader_count > 0 and len(app["votes"]) >= reader_count:
+                is_successful = True
+            if username.lower() in manual_success:
+                is_successful = True
+                
+            # Avoid duplicate processing
+            if is_successful and member not in successful_dms:
+                successful_dms.append(member)
+            elif not is_successful and member not in failed_dms:
+                failed_dms.append(member)
+                
+        # Resolve any duplicates between lists (success overrides failure)
+        failed_dms = [m for m in failed_dms if m not in successful_dms]
+
+        if not successful_dms and not failed_dms:
+            return await ctx.send("Could not find any matching users in this server to send results to.")
+
+        # Preview output
+        preview_lines = []
+        if successful_dms:
+            preview_lines.append("### 🟢 **Successful Candidates (Accepted):**")
+            for m in successful_dms:
+                preview_lines.append(f"• **{m.display_name}** (`{m.name}`)")
+                
+        if failed_dms:
+            preview_lines.append("\n### 🔴 **Unsuccessful Candidates (Rejected):**")
+            for m in failed_dms:
+                preview_lines.append(f"• **{m.display_name}** (`{m.name}`)")
+                
+        if not_found:
+            preview_lines.append("\n### ⚠️ **Users NOT found (Skipping):**")
+            for un in not_found:
+                preview_lines.append(f"• `{un}`")
+
+        preview_text = "\n".join(preview_lines)
+        for page in pagify(preview_text):
+            await ctx.send(page)
+
+        await ctx.send(f"\n**Do you want to proceed with sending these result DMs?** (Type `yes` to send, `no` to cancel)\n*Success message count:* **{len(successful_dms)}** | *Fail message count:* **{len(failed_dms)}**")
+
+        pred = MessagePredicate.yes_or_no(ctx)
+        try:
+            await self.bot.wait_for("message", check=pred, timeout=60.0)
+        except asyncio.TimeoutError:
+            return await ctx.send("You took too long to respond. Action cancelled.")
+            
+        if not pred.result:
+            return await ctx.send("Action cancelled. No DMs were sent.")
+
+        msg = await ctx.send("Sending Result DMs... Please wait. ⏳")
+        successful_sent = 0
+        failed_sent = 0
+        dm_errors = 0
+        
+        success_msg_text = await self.config.guild(ctx.guild).custom_success_message()
+        fail_msg_text = await self.config.guild(ctx.guild).custom_fail_message()
+
+        for member in successful_dms:
+            try:
+                embed = discord.Embed(
+                    title="🎉 Application Successful",
+                    description=f"Hello **{member.display_name}**,\n\n{success_msg_text}",
+                    color=discord.Color.green()
+                )
+                await member.send(embed=embed)
+                successful_sent += 1
+                await asyncio.sleep(1.5)
+            except discord.HTTPException:
+                dm_errors += 1
+
+        for member in failed_dms:
+            try:
+                embed = discord.Embed(
+                    title="📝 Application Status",
+                    description=f"Hello **{member.display_name}**,\n\n{fail_msg_text}",
+                    color=discord.Color.red()
+                )
+                await member.send(embed=embed)
+                failed_sent += 1
+                await asyncio.sleep(1.5)
+            except discord.HTTPException:
+                dm_errors += 1
+
+        await msg.edit(content=f"✅ **Done!**\nSuccessfully sent **{successful_sent}** acceptance DMs and **{failed_sent}** rejection DMs.\nFailed to send **{dm_errors}** DMs (users likely have DMs disabled).")
 
     @commands.command()
     @commands.guild_only()
