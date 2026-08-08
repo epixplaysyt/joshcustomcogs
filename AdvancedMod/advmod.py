@@ -386,7 +386,7 @@ class AdvancedMod(commands.Cog):
             warns.append({"reason": reason, "proof": proof_data, "mod": ctx.author.id, "time": time.time()})
             total_warns = len(warns)
 
-        await ctx.send(f"⚠️ {target.mention} has been logged for warning infraction #{total_warns}.")
+        await ctx.send(f"⚠️ {target.mention} has been logged for warning #{total_warns}.")
 
         embed = discord.Embed(title=f"Warning received in {ctx.guild.name}", description=f"**Reason:** {reason}\nTotal Server Infractions: {total_warns}", color=discord.Color.gold())
         await self._dm_user(target, embed, tag_user=True)
@@ -452,7 +452,7 @@ class AdvancedMod(commands.Cog):
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof missing.", ephemeral=True)
         
-        await ctx.send(f"🔇 Isolated {target.mention} for {minutes}m.")
+        await ctx.send(f"🔇 Timed out {target.mention} for {minutes}m.")
         
         await target.timeout(datetime.timedelta(minutes=minutes), reason=reason)
         embed = discord.Embed(title=f"Timed Out in {ctx.guild.name}", description=f"Duration: {minutes} minutes\n**Reason:** {reason}", color=discord.Color.orange())
@@ -473,13 +473,13 @@ class AdvancedMod(commands.Cog):
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
         if await self._has_level(ctx, 2):
-            await ctx.send(f"👢 Removed {target.mention} from server space.")
+            await ctx.send(f"👢 Removed {target.mention} from the server.")
             embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
             await self._dm_user(target, embed, tag_user=True)
             await target.kick(reason=reason)
             await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data)
         else:
-            await ctx.send(f"⏳ Verification request for kick dispatched to Class II+ authorities.")
+            await ctx.send(f"⏳ Verification request for kick sent to Class II+ moderators.)
             await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2)
 
     @commands.hybrid_command(name="tempban", description="[Class I+] Tempban a user by mention or ID.")
@@ -495,10 +495,10 @@ class AdvancedMod(commands.Cog):
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
         if await self._has_level(ctx, 3):
-            await ctx.send(f"⏳ Temporarily restricted access for {target} for {duration_days} days.")
+            await ctx.send(f"⏳ Temporarily banned {target} for {duration_days} days.")
             await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True, temp_days=duration_days)
         else:
-            await ctx.send(f"⏳ Verification request for temporary ban dispatched to Class III+ authorities.")
+            await ctx.send(f"⏳ Verification request for temporary ban sent to Class III+ moderators.")
             await self.create_request(ctx, "tempban", target, reason, proof_data, ping_level=3, extra_data={"duration_days": duration_days})
 
     @commands.hybrid_command(name="ban", description="[Class II+] Ban a user by mention or ID.")
@@ -512,10 +512,10 @@ class AdvancedMod(commands.Cog):
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
         if await self._has_level(ctx, 3):
-            await ctx.send(f"🔨 Permanently restricted network access for {target}.")
+            await ctx.send(f"🔨 Permanently banned {target}.")
             await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True)
         else:
-            await ctx.send(f"⏳ Verification request for ban dispatched to Class III+ authorities.")
+            await ctx.send(f"⏳ Verification request for ban sent to Class III+ moderators.")
             await self.create_request(ctx, "permban (appealable)", target, reason, proof_data, ping_level=3)
 
     @commands.hybrid_command(name="strictban", description="[Manager+] Strict ban user by mention or ID.")
