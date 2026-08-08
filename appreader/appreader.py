@@ -78,22 +78,32 @@ class AppReaderView(discord.ui.View):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
             
-        app = self.applications[self.current_index]
-        guild_data = self.cog.server_data.get(self.ctx.guild.id)
-        if not guild_data:
-            return await interaction.response.send_message("Data for this server is no longer available.", ephemeral=True)
-            
-        max_votes = guild_data.get("max_candidates", 0)
         user_id = interaction.user.id
+        max_votes = await self.cog.config.guild(self.ctx.guild).max_candidates()
         
-        if user_id in app["votes"]:
-            app["votes"].remove(user_id)
-        else:
-            current_votes = sum(1 for a in guild_data["apps"] if user_id in a["votes"])
-            if current_votes >= max_votes:
-                return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes.", ephemeral=True)
-            app["votes"].add(user_id)
+        # Open config to mutate the saved list
+        async with self.cog.config.guild(self.ctx.guild).apps() as saved_apps:
+            if not saved_apps:
+                return await interaction.response.send_message("Application data is no longer available.", ephemeral=True)
             
+            # Find the actual app in the saved list (matching by username is safest here)
+            current_app_username = self.applications[self.current_index]["discord_username"]
+            target_app = next((a for a in saved_apps if a["discord_username"] == current_app_username), None)
+            
+            if not target_app:
+                return await interaction.response.send_message("Could not locate this specific application in the database.", ephemeral=True)
+            
+            if user_id in target_app["votes"]:
+                target_app["votes"].remove(user_id)
+            else:
+                current_votes = sum(1 for a in saved_apps if user_id in a["votes"])
+                if current_votes >= max_votes:
+                    return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes.", ephemeral=True)
+                target_app["votes"].append(user_id)
+            
+            # Update local memory applications list so UI matches
+            self.applications = saved_apps
+
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
@@ -174,13 +184,17 @@ class ScoreMailer(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=823479234823, force_registration=True)
+        # Registering persistent variables per guild
         self.config.register_guild(
             allowed_role_id=None,
             custom_dm_message="Congratulations for completing the tester application! This score is only part of your application.",
             custom_success_message="Congratulations! Your application has been successful and you will proceed to the next stage.",
-            custom_fail_message="Unfortunately, your application was not successful this time. Thank you for your interest."
+            custom_fail_message="Unfortunately, your application was not successful this time. Thank you for your interest.",
+            apps=[],
+            csv_text="",
+            max_candidates=0,
+            manual_success=[]
         )
-        self.server_data = {}
 
     @commands.command()
     @commands.guild_only()
@@ -288,29 +302,29 @@ class ScoreMailer(commands.Cog):
                     "discord_username": discord_username,
                     "total_score": total_score,
                     "q_and_a": app_data,
-                    "votes": set()
+                    "votes": [] # Uses a list instead of set for JSON Config saving
                 })
                 
         if not applications:
             return await ctx.send("No valid applications found in the CSV.")
 
-        self.server_data[ctx.guild.id] = {
-            "apps": applications,
-            "csv_text": text,
-            "max_candidates": max_candidates,
-            "manual_success": set()
-        }
+        # Save to Config instead of memory dict
+        await self.config.guild(ctx.guild).apps.set(applications)
+        await self.config.guild(ctx.guild).csv_text.set(text)
+        await self.config.guild(ctx.guild).max_candidates.set(max_candidates)
+        await self.config.guild(ctx.guild).manual_success.set([])
+        
         await ctx.send(f"Successfully loaded {len(applications)} applications. Readers can vote for up to {max_candidates} candidates to proceed.")
 
     @commands.command()
     @commands.guild_only()
     @has_app_role()
     async def readapps(self, ctx, sort: str = None):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data or not guild_data.get("apps"):
+        apps = await self.config.guild(ctx.guild).apps()
+        if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
 
-        apps_to_read = list(guild_data["apps"])
+        apps_to_read = list(apps)
 
         if sort and sort.lower() in ["score", "highest", "best"]:
             def get_sort_score(app):
@@ -337,11 +351,10 @@ class ScoreMailer(commands.Cog):
     @commands.guild_only()
     @has_app_role()
     async def rankcandidates(self, ctx):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data or not guild_data.get("apps"):
+        apps = await self.config.guild(ctx.guild).apps()
+        if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
 
-        apps = guild_data["apps"]
         ranked_apps = [app for app in apps if len(app["votes"]) > 0]
         
         if not ranked_apps:
@@ -370,34 +383,37 @@ class ScoreMailer(commands.Cog):
     @commands.guild_only()
     @has_app_role()
     async def addsuccess(self, ctx, *, username: str):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data:
+        apps = await self.config.guild(ctx.guild).apps()
+        if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
             
-        guild_data["manual_success"].add(username.lower())
+        async with self.config.guild(ctx.guild).manual_success() as manual:
+            if username.lower() not in manual:
+                manual.append(username.lower())
+                
         await ctx.send(f"✅ **{username}** has been manually added to the successful candidates list.")
 
     @commands.command()
     @commands.guild_only()
     @has_app_role()
     async def removesuccess(self, ctx, *, username: str):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data:
+        apps = await self.config.guild(ctx.guild).apps()
+        if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
             
-        manual = guild_data["manual_success"]
-        if username.lower() in manual:
-            manual.remove(username.lower())
-            await ctx.send(f"✅ **{username}** has been removed from the manual successful candidates list.")
-        else:
-            await ctx.send(f"❌ **{username}** is not in the manual successful candidates list.")
+        async with self.config.guild(ctx.guild).manual_success() as manual:
+            if username.lower() in manual:
+                manual.remove(username.lower())
+                await ctx.send(f"✅ **{username}** has been removed from the manual successful candidates list.")
+            else:
+                await ctx.send(f"❌ **{username}** is not in the manual successful candidates list.")
 
     @commands.command()
     @commands.guild_only()
     @has_app_role()
     async def mailresults(self, ctx):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data or not guild_data.get("apps"):
+        apps = await self.config.guild(ctx.guild).apps()
+        if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
 
         role_id = await self.config.guild(ctx.guild).allowed_role_id()
@@ -414,8 +430,7 @@ class ScoreMailer(commands.Cog):
         if reader_count == 0:
             await ctx.send("⚠️ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
 
-        apps = guild_data["apps"]
-        manual_success = guild_data.get("manual_success", set())
+        manual_success = await self.config.guild(ctx.guild).manual_success()
         
         successful_dms = []
         failed_dms = []
@@ -523,11 +538,11 @@ class ScoreMailer(commands.Cog):
     @commands.guild_only()
     @has_app_role()
     async def mailscores(self, ctx):
-        guild_data = self.server_data.get(ctx.guild.id)
-        if not guild_data or not guild_data.get("csv_text"):
+        csv_text = await self.config.guild(ctx.guild).csv_text()
+        if not csv_text:
             return await ctx.send("No applications have been uploaded for this server yet.")
 
-        reader = csv.reader(io.StringIO(guild_data["csv_text"]))
+        reader = csv.reader(io.StringIO(csv_text))
         
         try:
             headers = next(reader)
