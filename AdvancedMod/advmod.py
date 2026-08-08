@@ -479,7 +479,7 @@ class AdvancedMod(commands.Cog):
             await target.kick(reason=reason)
             await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data)
         else:
-            await ctx.send(f"⏳ Verification request for kick sent to Class II+ moderators.)
+            await ctx.send(f"⏳ Verification request for kick sent to Class II+ moderators.")
             await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2)
 
     @commands.hybrid_command(name="tempban", description="[Class I+] Tempban a user by mention or ID.")
