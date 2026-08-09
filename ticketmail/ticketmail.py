@@ -5,8 +5,6 @@ from discord.ext import tasks
 import io
 import datetime
 
-# --- UI Builder Classes ---
-
 class EmbedTextModal(discord.ui.Modal, title='Edit Embed Text'):
     emb_title = discord.ui.TextInput(label='Title', style=discord.TextStyle.short, required=False, max_length=256)
     emb_desc = discord.ui.TextInput(label='Description', style=discord.TextStyle.paragraph, required=False, max_length=4000)
@@ -190,13 +188,10 @@ class TicketConfirmationView(discord.ui.View):
         except Exception:
             pass
 
-
-# --- Main Cog ---
-
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938471, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938472, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
