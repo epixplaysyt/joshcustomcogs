@@ -14,11 +14,16 @@ class TicketConfirmationView(discord.ui.View):
         self.initial_message = initial_message
         self.message = None
 
-        for dept_name in departments.keys():
+        for dept_name, dept_data in departments.items():
+            emoji = None
+            if isinstance(dept_data, dict):
+                emoji = dept_data.get("emoji")
+                
             button = discord.ui.Button(
                 label=f"Open {dept_name.title()}",
                 style=discord.ButtonStyle.success,
-                custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}"
+                custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
+                emoji=emoji
             )
             button.callback = self.make_callback(dept_name)
             self.add_item(button)
@@ -37,7 +42,7 @@ class TicketConfirmationView(discord.ui.View):
             self.stop()
             
             try:
-                channel = await self.cog._create_ticket(self.guild, self.user, dept_name)
+                channel = await self.cog._create_ticket(self.guild, self.user, dept_name, self.initial_message.content)
             except Exception as e:
                 print(f"[Modmail Error] Failed to create channel via button: {e}")
                 await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has 'Manage Channels' permissions.", view=None)
@@ -74,6 +79,7 @@ class TicketConfirmationView(discord.ui.View):
         except Exception:
             pass
 
+
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -86,10 +92,12 @@ class Modmail(commands.Cog):
             immune_roles=[],
             blocked_users=[],
             ticket_counter=1000,
-            departments={"general": None},
+            departments={"general": {"category_id": None, "emoji": None, "message": None}},
             support_hours={"start": None, "end": None},
             response_stats={},
-            busy_mode=False
+            busy_mode=False,
+            auto_responders={},
+            snippets={}
         )
         self.config.register_user(active_channel_id=None)
         self.config.register_channel(
@@ -284,12 +292,14 @@ class Modmail(commands.Cog):
                     except discord.Forbidden:
                         pass
 
-    async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general"):
+    async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general", initial_message_content: str = ""):
         departments = await self.config.guild(guild).departments()
         if not isinstance(departments, dict) or department not in departments:
             department = "general"
             
-        category_id = departments.get(department) if isinstance(departments, dict) else None
+        dept_data = departments.get(department)
+        category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else (dept_data if isinstance(dept_data, int) else None)
+        custom_message = dept_data.get("message") if isinstance(dept_data, dict) else None
         category = guild.get_channel(category_id) if category_id else None
 
         counter = await self.config.guild(guild).ticket_counter() + 1
@@ -311,6 +321,7 @@ class Modmail(commands.Cog):
         in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
         stats = await self.config.guild(guild).response_stats()
         busy_mode = await self.config.guild(guild).busy_mode()
+        auto_responders = await self.config.guild(guild).auto_responders()
         
         dept_stats = stats.get(department, {})
         time_prefix = 'in' if in_hours else 'out'
@@ -332,7 +343,8 @@ class Modmail(commands.Cog):
                 f"**Ticket ID:** `{ticket_id}`\n"
                 f"**Account Created:** {created_at}\n\n"
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
-                f"Type here to reply, or use `!anon ` to send anonymous messages.")
+                f"Type here to reply, or use `!anon ` to send anonymous messages.\n"
+                f"Use `!n ` for internal notes that won't be sent to the user.")
         
         if busy_mode:
             desc += "\n\n⚠️ **Notice:** This ticket was opened during high volume congestion parameters."
@@ -354,6 +366,10 @@ class Modmail(commands.Cog):
                 color=discord.Color.green(),
                 timestamp=now
             )
+            
+            if custom_message:
+                user_embed.add_field(name="Department Message", value=custom_message, inline=False)
+                
             user_embed.add_field(
                 name=f"Expected Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'})",
                 value=f"`{avg_str}`",
@@ -374,6 +390,31 @@ class Modmail(commands.Cog):
                     inline=False
                 )
             await user.send(embed=user_embed)
+            
+            if initial_message_content:
+                matched_response = None
+                for kw, resp in auto_responders.items():
+                    if kw.lower() in initial_message_content.lower():
+                        matched_response = resp
+                        break
+                        
+                if matched_response:
+                    ar_embed = discord.Embed(
+                        title="🤖 Automated Response",
+                        description=matched_response,
+                        color=discord.Color.blue(),
+                        timestamp=now
+                    )
+                    await user.send(embed=ar_embed)
+                    
+                    chan_ar_embed = discord.Embed(
+                        title="🤖 Auto-Responder Triggered",
+                        description=f"**Trigger:** User's first message matched a keyword.\n**Response Sent:**\n{matched_response}",
+                        color=discord.Color.blue(),
+                        timestamp=now
+                    )
+                    await channel.send(embed=chan_ar_embed)
+                    
         except discord.Forbidden:
             await channel.send("⚠️ **Warning:** The user has DMs disabled.")
 
@@ -434,6 +475,10 @@ class Modmail(commands.Cog):
                     if embed_obj.author.name.startswith("[Anonymous]"):
                         is_anon_msg = True
                         username = embed_obj.author.name.replace("[Anonymous] ", "")
+                        avatar_url = embed_obj.author.icon_url or avatar_url
+                    elif embed_obj.author.name == "Support Team":
+                        is_anon_msg = True
+                        username = "Support Team"
                         avatar_url = embed_obj.author.icon_url or avatar_url
                     else:
                         username = embed_obj.author.name
@@ -555,12 +600,12 @@ class Modmail(commands.Cog):
 
                 departments = await self.config.guild(guild).departments()
                 if not isinstance(departments, dict) or not departments:
-                    departments = {"general": None}
+                    departments = {"general": {"category_id": None, "emoji": None, "message": None}}
                 
                 if len(departments) == 1:
                     dept_name = list(departments.keys())[0]
                     try:
-                        channel = await self._create_ticket(guild, message.author, dept_name)
+                        channel = await self._create_ticket(guild, message.author, dept_name, message.content)
                         if channel:
                             role_name = member.top_role.name if member else "User"
                             ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
@@ -599,8 +644,49 @@ class Modmail(commands.Cog):
         else:
             owner_id = await self.config.channel(message.channel).owner_id()
             if owner_id:
+                # Intercept logic for standard messages, snippets, notes, and anons
                 ctx = await self.bot.get_context(message)
-                if ctx.valid and not message.content.startswith("!anon "):
+                
+                is_anon = False
+                is_note = False
+                clean_content = message.content
+
+                if message.content.startswith("!anon "):
+                    is_anon = True
+                    clean_content = message.content[6:].strip()
+                elif message.content.startswith("!n "):
+                    is_note = True
+                    clean_content = message.content[3:].strip()
+                elif message.content.startswith("!"):
+                    # Check for snippet commands
+                    snippets = await self.config.guild(message.guild).snippets()
+                    first_word = message.content.split()[0][1:]
+                    if first_word in snippets:
+                        snippet = snippets[first_word]
+                        is_anon = snippet.get("anon", False)
+                        clean_content = snippet.get("text", "")
+                    elif ctx.valid:
+                        return  # It's a valid redbot command and not a snippet
+                elif ctx.valid:
+                    return  # It's a valid redbot command without our prefix triggers
+
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.NotFound):
+                    pass
+
+                files_for_channel = [await a.to_file() for a in message.attachments]
+                files_for_user = [await a.to_file() for a in message.attachments]
+
+                if is_note:
+                    note_embed = discord.Embed(
+                        title="📝 Internal Note", 
+                        description=clean_content, 
+                        color=discord.Color.gold(),
+                        timestamp=now
+                    )
+                    note_embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                    await message.channel.send(embed=note_embed, files=files_for_channel)
                     return
 
                 waiting_since = await self.config.channel(message.channel).waiting_since()
@@ -615,12 +701,10 @@ class Modmail(commands.Cog):
 
                 user = self.bot.get_user(owner_id)
                 if not user:
-                    return await message.channel.send("⚠️ Error: User not found.")
+                    warning_embed = discord.Embed(description="⚠️ Error: User not found. They may have left the server.", color=discord.Color.red())
+                    return await message.channel.send(embed=warning_embed)
 
                 ticket_id = await self.config.channel(message.channel).ticket_id() or "UNKNOWN"
-                is_anon = message.content.startswith("!anon ")
-                clean_content = message.content[6:].strip() if is_anon else message.content
-
                 member = message.guild.get_member(message.author.id)
                 role_name = member.top_role.name if member else "Staff"
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
@@ -628,9 +712,6 @@ class Modmail(commands.Cog):
                 reply_author, reply_text = await self._get_reply_context(message)
 
                 try:
-                    files_for_user = [await a.to_file() for a in message.attachments]
-                    files_for_channel = [await a.to_file() for a in message.attachments]
-
                     user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
                     
                     if reply_author and reply_text:
@@ -646,19 +727,23 @@ class Modmail(commands.Cog):
                     
                     await user.send(embed=user_embed, files=files_for_user)
 
+                    chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
+                    
                     if is_anon:
-                        await message.delete()
-                        chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey(), timestamp=now)
                         chan_embed.set_author(name=f"[Anonymous] {message.author.name}", icon_url=message.author.display_avatar.url)
-                        chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
-                        if reply_author and reply_text:
-                            chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
-                        await message.channel.send(embed=chan_embed, files=files_for_channel)
                     else:
-                        await message.add_reaction("📤")
+                        chan_embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
+                        
+                    chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                    
+                    if reply_author and reply_text:
+                        chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
+                        
+                    await message.channel.send(embed=chan_embed, files=files_for_channel)
 
                 except discord.Forbidden:
-                    await message.channel.send("❌ Error: The user has DMs disabled.")
+                    error_embed = discord.Embed(description="❌ Error: The user has DMs disabled.", color=discord.Color.red())
+                    await message.channel.send(embed=error_embed)
 
     ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets")
 
@@ -669,7 +754,7 @@ class Modmail(commands.Cog):
         if active_channel_id and interaction.guild.get_channel(active_channel_id):
             return await interaction.response.send_message(f"❌ This user already has an open ticket: <#{active_channel_id}>", ephemeral=True)
 
-        channel = await self._create_ticket(interaction.guild, user, "general")
+        channel = await self._create_ticket(interaction.guild, user, "general", "")
         await interaction.response.send_message(f"✅ Ticket channel created in {channel.mention}", ephemeral=True)
 
     @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
@@ -697,7 +782,10 @@ class Modmail(commands.Cog):
             options = ", ".join([d.title() for d in departments.keys()]) if isinstance(departments, dict) else "None"
             return await interaction.response.send_message(f"❌ Department not found. Options: `{options}`", ephemeral=True)
 
-        category_id = departments[department]
+        dept_data = departments[department]
+        category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else dept_data
+        custom_msg = dept_data.get("message") if isinstance(dept_data, dict) else None
+        
         category = interaction.guild.get_channel(category_id) if category_id else None
 
         if not category:
@@ -717,6 +805,8 @@ class Modmail(commands.Cog):
                     color=discord.Color.orange(),
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
+                if custom_msg:
+                    embed.add_field(name="Department Message", value=custom_msg, inline=False)
                 embed.set_footer(text="A specialized support member will be with you shortly.")
                 await user.send(embed=embed)
             except discord.Forbidden:
@@ -814,43 +904,106 @@ class Modmail(commands.Cog):
         await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
         await ctx.send(f"✅ Logs will now be saved in {channel.mention}.")
 
-    @modmailset.command(name="block")
-    async def modmailset_block(self, ctx, user: discord.User):
-        async with self.config.guild(ctx.guild).blocked_users() as blocked:
-            if user.id not in blocked:
-                blocked.append(user.id)
-                await ctx.send(f"🚫 **{user.name}** has been blocked.")
-            else:
-                await ctx.send("❌ That user is already blocked.")
-
-    @modmailset.command(name="unblock")
-    async def modmailset_unblock(self, ctx, user: discord.User):
-        async with self.config.guild(ctx.guild).blocked_users() as blocked:
-            if user.id in blocked:
-                blocked.remove(user.id)
-                await ctx.send(f"✅ **{user.name}** has been unblocked.")
-            else:
-                await ctx.send("❌ That user is not currently blocked.")
-
     @modmailset.group(name="department")
     async def modmailset_department(self, ctx):
+        """Manage departments."""
         pass
 
     @modmailset_department.command(name="set")
     async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
+        """Link a department to a specific category channel."""
         name = name.lower()
         async with self.config.guild(ctx.guild).departments() as deps:
             if not isinstance(deps, dict):
                 deps = {}
-            deps[name] = category.id
-            await self.config.guild(ctx.guild).departments.set(deps)
+            if name not in deps or not isinstance(deps[name], dict):
+                deps[name] = {"category_id": category.id, "emoji": None, "message": None}
+            else:
+                deps[name]["category_id"] = category.id
         await ctx.send(f"✅ Department **{name.title()}** linked to **{category.name}**.")
 
+    @modmailset_department.command(name="emoji")
+    async def m_dep_emoji(self, ctx, name: str, emoji: str = None):
+        """Set an emoji for the department to display in the UI buttons."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).departments() as deps:
+            if name not in deps:
+                return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
+            if not isinstance(deps[name], dict):
+                deps[name] = {"category_id": deps[name], "emoji": emoji, "message": None}
+            else:
+                deps[name]["emoji"] = emoji
+        await ctx.send(f"✅ Set the emoji for **{name.title()}** to {emoji if emoji else 'None'}.")
+
+    @modmailset_department.command(name="message")
+    async def m_dep_msg(self, ctx, name: str, *, message: str = None):
+        """Set a custom embed message to send when a user connects/transfers to this department."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).departments() as deps:
+            if name not in deps:
+                return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
+            if not isinstance(deps[name], dict):
+                deps[name] = {"category_id": deps[name], "emoji": None, "message": message}
+            else:
+                deps[name]["message"] = message
+        if message:
+            await ctx.send(f"✅ Custom message for **{name.title()}** set.")
+        else:
+            await ctx.send(f"✅ Custom message for **{name.title()}** removed.")
+
+    @modmailset.group(name="autoresponder")
+    async def modmailset_autoresponder(self, ctx):
+        """Manage trigger keywords for automatic responses on the first message."""
+        pass
+        
+    @modmailset_autoresponder.command(name="add")
+    async def m_auto_add(self, ctx, keyword: str, *, response: str):
+        """Add an auto-response trigger. If the keyword is in the user's first message, it responds."""
+        async with self.config.guild(ctx.guild).auto_responders() as ar:
+            ar[keyword.lower()] = response
+        await ctx.send(f"✅ Auto-responder for `{keyword.lower()}` added.")
+        
+    @modmailset_autoresponder.command(name="remove")
+    async def m_auto_remove(self, ctx, keyword: str):
+        """Remove an auto-responder keyword."""
+        async with self.config.guild(ctx.guild).auto_responders() as ar:
+            if keyword.lower() in ar:
+                del ar[keyword.lower()]
+                await ctx.send(f"✅ Auto-responder for `{keyword.lower()}` removed.")
+            else:
+                await ctx.send("❌ Keyword not found.")
+
+    @modmailset.group(name="snippet")
+    async def modmailset_snippet(self, ctx):
+        """Manage custom command snippets for rapid responses."""
+        pass
+        
+    @modmailset_snippet.command(name="add")
+    async def m_snippet_add(self, ctx, name: str, anonymous: bool, *, text: str):
+        """Add a snippet command. Use like !<name> inside a ticket. Anonymous must be true or false."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).snippets() as snippets:
+            snippets[name] = {"text": text, "anon": anonymous}
+        mode = "Anonymous" if anonymous else "Standard"
+        await ctx.send(f"✅ Snippet `!{name}` added. (Mode: {mode})")
+
+    @modmailset_snippet.command(name="remove")
+    async def m_snippet_remove(self, ctx, name: str):
+        """Remove a custom snippet."""
+        name = name.lower()
+        async with self.config.guild(ctx.guild).snippets() as snippets:
+            if name in snippets:
+                del snippets[name]
+                await ctx.send(f"✅ Snippet `!{name}` removed.")
+            else:
+                await ctx.send("❌ Snippet not found.")
+                
     @modmailset.group(name="immune")
     async def modmailset_immune(self, ctx):
+        """Manage immune roles."""
         pass
 
-    @modmailset.command(name="add")
+    @modmailset_immune.command(name="add")
     async def m_im_add(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id not in immune:
@@ -859,7 +1012,7 @@ class Modmail(commands.Cog):
             else:
                 await ctx.send("❌ That role is already on the immune list.")
 
-    @modmailset.command(name="remove")
+    @modmailset_immune.command(name="remove")
     async def m_im_remove(self, ctx, role: discord.Role):
         async with self.config.guild(ctx.guild).immune_roles() as immune:
             if role.id in immune:
