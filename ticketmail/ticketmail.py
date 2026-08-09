@@ -122,8 +122,7 @@ class TicketConfirmationView(discord.ui.View):
         self.guild = guild
         self.initial_message = initial_message
         self.message = None
-
-        # Cycle through colors for buttons instead of all being green
+        
         button_styles = [
             discord.ButtonStyle.primary,
             discord.ButtonStyle.success,
@@ -201,7 +200,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self. = .get_conf(self, identifier=8472938473, force_registration=True)
+        self. = .get_conf(self, identifier=8472938474, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -404,7 +403,6 @@ class Modmail(commands.Cog):
                     date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                     ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
 
-                    # Changed from member.name to member.display_name for reaction forwarded embed
                     embed = discord.Embed(
                         description=f"Reacted with {emoji_str}",
                         color=discord.Color.green(),
@@ -444,7 +442,6 @@ class Modmail(commands.Cog):
 
         now = datetime.datetime.now(datetime.timezone.utc)
         
-        # User Ticket History Update
         history_count = await self.config.user(user).history_count()
         last_ticket_time = await self.config.user(user).last_ticket_time()
         
@@ -618,7 +615,6 @@ class Modmail(commands.Cog):
             member_obj = guild.get_member(m.author.id)
             if member_obj:
                 role_str = member_obj.top_role.name
-                # Use display_name in transcripts for staff as well
                 if not m.author.bot:
                     username = member_obj.display_name
 
@@ -830,7 +826,6 @@ class Modmail(commands.Cog):
                 files_for_user = [await a.to_file() for a in message.attachments]
 
                 member = message.guild.get_member(message.author.id)
-                # Pull the user's nickname if they have one, otherwise fallback to their global display name
                 staff_name = member.display_name if member else message.author.display_name
 
                 if is_note:
@@ -918,10 +913,7 @@ class Modmail(commands.Cog):
         if not owner_id:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
         
-        # Uses display_name (nickname) instead of raw username
         await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.display_name}")
-        
-        # Converted response to an Embed
         embed = discord.Embed(
             description=f"✋ **{interaction.user.mention} is now handling this ticket.**",
             color=discord.Color.brand_green()
@@ -963,7 +955,6 @@ class Modmail(commands.Cog):
         ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
         await self.config.channel(interaction.channel).department.set(department)
         
-        # Converted response to an Embed
         success_embed = discord.Embed(
             description=f"✅ Ticket moved to the **{department.title()}** department.",
             color=discord.Color.orange()
@@ -998,7 +989,6 @@ class Modmail(commands.Cog):
         if not owner_id:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        # Uses an embed for consistency
         closing_embed = discord.Embed(
             description="🔒 Closing ticket and archiving transcript...",
             color=discord.Color.red()
