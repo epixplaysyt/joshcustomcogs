@@ -25,7 +25,7 @@ class EmbedTextModal(discord.ui.Modal, title='Edit Embed Text'):
 class EmbedStyleModal(discord.ui.Modal, title='Edit Embed Style'):
     emb_color = discord.ui.TextInput(label='Hex Color (e.g., FF0000)', style=discord.TextStyle.short, required=False, max_length=7)
     emb_footer = discord.ui.TextInput(label='Footer Text', style=discord.TextStyle.short, required=False, max_length=2048)
-    emb_thumb = discord.ui.TextInput(label='Thumbnail URL (Must be a valid image link)', style=discord.TextStyle.short, required=False)
+    emb_thumb = discord.ui.TextInput(label='Thumbnail URL', style=discord.TextStyle.short, required=False)
 
     def __init__(self, view: 'EmbedBuilderView'):
         super().__init__()
@@ -129,7 +129,7 @@ class TicketConfirmationView(discord.ui.View):
                 emoji = dept_data.get("emoji")
                 
             button = discord.ui.Button(
-                label=f"{dept_name.title()} Department",
+                label=f"Open {dept_name.title()}",
                 style=discord.ButtonStyle.success,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
                 emoji=emoji
@@ -191,16 +191,17 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938472, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938473, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
         self.config.register_guild(
             log_channel_id=None,
+            ticket_category_id=None,
             immune_roles=[],
             blocked_users=[],
             ticket_counter=1000,
-            departments={"general": {"category_id": None, "emoji": None, "embed": None}},
+            departments={"general": {"role_id": None, "emoji": None, "embed": None}},
             support_hours={"start": None, "end": None},
             response_stats={},
             busy_mode=False,
@@ -406,8 +407,10 @@ class Modmail(commands.Cog):
             department = "general"
             
         dept_data = departments.get(department)
-        category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else (dept_data if isinstance(dept_data, int) else None)
-        category = guild.get_channel(category_id) if category_id else None
+        role_id = dept_data.get("role_id") if isinstance(dept_data, dict) else None
+        
+        master_category_id = await self.config.guild(guild).ticket_category_id()
+        category = guild.get_channel(master_category_id) if master_category_id else None
 
         counter = await self.config.guild(guild).ticket_counter() + 1
         await self.config.guild(guild).ticket_counter.set(counter)
@@ -416,6 +419,11 @@ class Modmail(commands.Cog):
 
         channel_name = f"{ticket_id.lower()}-{user.name}".lower().replace(" ", "-")
         channel = await guild.create_text_channel(name=channel_name, category=category)
+
+        if role_id:
+            dept_role = guild.get_role(role_id)
+            if dept_role:
+                await channel.set_permissions(dept_role, read_messages=True, send_messages=True)
 
         now = datetime.datetime.now(datetime.timezone.utc)
         await self.config.user(user).active_channel_id.set(channel.id)
@@ -467,7 +475,6 @@ class Modmail(commands.Cog):
         await channel.send(embed=embed)
         
         try:
-            # 1. Send the standard system confirmation embed
             user_embed = discord.Embed(
                 title=f"✅ Ticket Opened ({ticket_id})",
                 description=f"You are connected to the **{department.title()}** department.",
@@ -497,7 +504,6 @@ class Modmail(commands.Cog):
             
             await user.send(embed=user_embed)
 
-            # 2. Send the Custom Department Embed if one exists
             dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
             if dept_embed_dict:
                 custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
@@ -712,7 +718,7 @@ class Modmail(commands.Cog):
 
                 departments = await self.config.guild(guild).departments()
                 if not isinstance(departments, dict) or not departments:
-                    departments = {"general": {"category_id": None, "emoji": None, "embed": None}}
+                    departments = {"general": {"role_id": None, "emoji": None, "embed": None}}
                 
                 if len(departments) == 1:
                     dept_name = list(departments.keys())[0]
@@ -892,16 +898,24 @@ class Modmail(commands.Cog):
             options = ", ".join([d.title() for d in departments.keys()]) if isinstance(departments, dict) else "None"
             return await interaction.response.send_message(f"❌ Department not found. Options: `{options}`", ephemeral=True)
 
-        dept_data = departments[department]
-        category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else dept_data
-        
-        category = interaction.guild.get_channel(category_id) if category_id else None
+        old_dept = await self.config.channel(interaction.channel).department()
+        old_dept_data = departments.get(old_dept) if isinstance(departments, dict) else {}
+        old_role_id = old_dept_data.get("role_id") if isinstance(old_dept_data, dict) else None
 
-        if not category:
-            return await interaction.response.send_message(f"❌ No category found for `{department.title()}`.", ephemeral=True)
+        dept_data = departments[department]
+        new_role_id = dept_data.get("role_id") if isinstance(dept_data, dict) else None
+
+        if old_role_id:
+            old_role = interaction.guild.get_role(old_role_id)
+            if old_role:
+                await interaction.channel.set_permissions(old_role, overwrite=None)
+
+        if new_role_id:
+            new_role = interaction.guild.get_role(new_role_id)
+            if new_role:
+                await interaction.channel.set_permissions(new_role, read_messages=True, send_messages=True)
 
         ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
-        await interaction.channel.edit(category=category, sync_permissions=True)
         await self.config.channel(interaction.channel).department.set(department)
         await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
 
@@ -1017,23 +1031,29 @@ class Modmail(commands.Cog):
         await self.config.guild(ctx.guild).log_channel_id.set(channel.id)
         await ctx.send(f"✅ Logs will now be saved in {channel.mention}.")
 
+    @modmailset.command(name="category")
+    async def modmailset_category(self, ctx, category: discord.CategoryChannel):
+        """Set the master category where all tickets will be created."""
+        await self.config.guild(ctx.guild).ticket_category_id.set(category.id)
+        await ctx.send(f"✅ All new tickets will now be created in the **{category.name}** category.")
+
     @modmailset.group(name="department")
     async def modmailset_department(self, ctx):
         """Manage departments."""
         pass
 
     @modmailset_department.command(name="set")
-    async def m_dep_set(self, ctx, name: str, category: discord.CategoryChannel):
-        """Link a department to a specific category channel."""
+    async def m_dep_set(self, ctx, name: str, role: discord.Role):
+        """Link a department to a specific handler role."""
         name = name.lower()
         async with self.config.guild(ctx.guild).departments() as deps:
             if not isinstance(deps, dict):
                 deps = {}
             if name not in deps or not isinstance(deps[name], dict):
-                deps[name] = {"category_id": category.id, "emoji": None, "embed": None}
+                deps[name] = {"role_id": role.id, "emoji": None, "embed": None}
             else:
-                deps[name]["category_id"] = category.id
-        await ctx.send(f"✅ Department **{name.title()}** linked to **{category.name}**.")
+                deps[name]["role_id"] = role.id
+        await ctx.send(f"✅ Department **{name.title()}** is now securely handled by the **{role.name}** role.")
 
     @modmailset_department.command(name="emoji")
     async def m_dep_emoji(self, ctx, name: str, emoji: str = None):
@@ -1043,7 +1063,7 @@ class Modmail(commands.Cog):
             if name not in deps:
                 return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
             if not isinstance(deps[name], dict):
-                deps[name] = {"category_id": deps[name], "emoji": emoji, "embed": None}
+                deps[name] = {"role_id": deps[name], "emoji": emoji, "embed": None}
             else:
                 deps[name]["emoji"] = emoji
         await ctx.send(f"✅ Set the emoji for **{name.title()}** to {emoji if emoji else 'None'}.")
@@ -1074,7 +1094,7 @@ class Modmail(commands.Cog):
         
     @modmailset_autoresponder.command(name="add")
     async def m_auto_add(self, ctx, keyword: str, *, response: str):
-        """Add an auto-response trigger. If the keyword is in the user's first message, it responds."""
+        """Add an auto-response trigger."""
         async with self.config.guild(ctx.guild).auto_responders() as ar:
             ar[keyword.lower()] = response
         await ctx.send(f"✅ Auto-responder for `{keyword.lower()}` added.")
@@ -1096,7 +1116,7 @@ class Modmail(commands.Cog):
         
     @modmailset_snippet.command(name="add")
     async def m_snippet_add(self, ctx, name: str, anonymous: bool, *, text: str):
-        """Add a snippet command. Use like !<name> inside a ticket. Anonymous must be true or false."""
+        """Add a snippet command."""
         name = name.lower()
         async with self.config.guild(ctx.guild).snippets() as snippets:
             snippets[name] = {"text": text, "anon": anonymous}
