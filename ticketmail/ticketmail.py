@@ -126,8 +126,7 @@ class TicketConfirmationView(discord.ui.View):
         button_styles = [
             discord.ButtonStyle.primary,
             discord.ButtonStyle.success,
-            discord.ButtonStyle.secondary,
-            discord.ButtonStyle.danger
+            discord.ButtonStyle.secondary
         ]
 
         for idx, (dept_name, dept_data) in enumerate(departments.items()):
@@ -235,8 +234,7 @@ class Modmail(commands.Cog):
         self.custom_statuses = [
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
-            "🎫 Need help? DM me to talk to staff!",
-            "🔒 Secure and encrypted log archives"
+            "🎫 Need help? DM me to talk to staff!"
         ]
         self.status_index = 0
         
@@ -1041,7 +1039,6 @@ class Modmail(commands.Cog):
 
     @modmailset.command(name="busy")
     async def modmailset_busy(self, ctx):
-        """Toggle busy mode (High influx warnings & DnD Status overrides)."""
         current_state = await self.config.guild(ctx.guild).busy_mode()
         new_state = not current_state
         await self.config.guild(ctx.guild).busy_mode.set(new_state)
@@ -1080,18 +1077,15 @@ class Modmail(commands.Cog):
 
     @modmailset.command(name="category")
     async def modmailset_category(self, ctx, category: discord.CategoryChannel):
-        """Set the master category where all tickets will be created."""
         await self.config.guild(ctx.guild).ticket_category_id.set(category.id)
         await ctx.send(f"✅ All new tickets will now be created in the **{category.name}** category.")
 
     @modmailset.group(name="department")
     async def modmailset_department(self, ctx):
-        """Manage departments."""
         pass
 
     @modmailset_department.command(name="set")
     async def m_dep_set(self, ctx, name: str, role: discord.Role):
-        """Link a department to a specific handler role."""
         name = name.lower()
         async with self.config.guild(ctx.guild).departments() as deps:
             if not isinstance(deps, dict):
@@ -1104,102 +1098,57 @@ class Modmail(commands.Cog):
 
     @modmailset_department.command(name="emoji")
     async def m_dep_emoji(self, ctx, name: str, emoji: str = None):
-        """Set an emoji for the department to display in the UI buttons."""
         name = name.lower()
         async with self.config.guild(ctx.guild).departments() as deps:
             if name not in deps:
-                return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
-            if not isinstance(deps[name], dict):
-                deps[name] = {"role_id": deps[name], "emoji": emoji, "embed": None}
-            else:
-                deps[name]["emoji"] = emoji
-        await ctx.send(f"✅ Set the emoji for **{name.title()}** to {emoji if emoji else 'None'}.")
+                return await ctx.send(f"❌ Department `{name.title()}` does not exist. Please configure it first.")
+            deps[name]["emoji"] = emoji
+        if emoji:
+            await ctx.send(f"✅ Department **{name.title()}** now uses emoji: {emoji}")
+        else:
+            await ctx.send(f"✅ Department **{name.title()}** emoji stripped.")
 
     @modmailset_department.command(name="message")
-    async def m_dep_msg(self, ctx, name: str):
-        """Open the interactive embed builder to create a greeting for a department."""
+    async def m_dep_message(self, ctx, name: str):
         name = name.lower()
         departments = await self.config.guild(ctx.guild).departments()
-        
         if not isinstance(departments, dict) or name not in departments:
-            return await ctx.send(f"❌ Department `{name.title()}` does not exist. Please create it first.")
-
-        existing_embed_dict = departments[name].get("embed")
+            return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
+            
+        existing_embed = departments[name].get("embed")
+        view = EmbedBuilderView(self, ctx, name, existing_embed)
         
-        view = EmbedBuilderView(self, ctx, name, existing_embed_dict)
-        msg = await ctx.send(
-            content="**Interactive Embed Builder**\nPreview:", 
-            embed=view.current_embed, 
+        await ctx.send(
+            "**Interactive Greeting Embed Builder**\n"
+            "This will create the greeting that is automatically sent to users when they open a ticket in this department.\n\n"
+            "Click a button below to begin:",
+            embed=view.current_embed,
             view=view
         )
-        view.message = msg
 
-    @modmailset.group(name="autoresponder")
-    async def modmailset_autoresponder(self, ctx):
-        """Manage trigger keywords for automatic responses on the first message."""
-        pass
-        
-    @modmailset_autoresponder.command(name="add")
-    async def m_auto_add(self, ctx, keyword: str, *, response: str):
-        """Add an auto-response trigger."""
-        async with self.config.guild(ctx.guild).auto_responders() as ar:
-            ar[keyword.lower()] = response
-        await ctx.send(f"✅ Auto-responder for `{keyword.lower()}` added.")
-        
-    @modmailset_autoresponder.command(name="remove")
-    async def m_auto_remove(self, ctx, keyword: str):
-        """Remove an auto-responder keyword."""
-        async with self.config.guild(ctx.guild).auto_responders() as ar:
-            if keyword.lower() in ar:
-                del ar[keyword.lower()]
-                await ctx.send(f"✅ Auto-responder for `{keyword.lower()}` removed.")
-            else:
-                await ctx.send("❌ Keyword not found.")
-
-    @modmailset.group(name="snippet")
-    async def modmailset_snippet(self, ctx):
-        """Manage custom command snippets for rapid responses."""
-        pass
-        
-    @modmailset_snippet.command(name="add")
-    async def m_snippet_add(self, ctx, name: str, anonymous: bool, *, text: str):
-        """Add a snippet command."""
+    @modmailset_department.command(name="remove")
+    async def m_dep_remove(self, ctx, name: str):
         name = name.lower()
-        async with self.config.guild(ctx.guild).snippets() as snippets:
-            snippets[name] = {"text": text, "anon": anonymous}
-        mode = "Anonymous" if anonymous else "Standard"
-        await ctx.send(f"✅ Snippet `!{name}` added. (Mode: {mode})")
+        async with self.config.guild(ctx.guild).departments() as deps:
+            if isinstance(deps, dict) and name in deps:
+                del deps[name]
+                await ctx.send(f"✅ Department **{name.title()}** has been removed.")
+            else:
+                await ctx.send(f"❌ Department **{name.title()}** does not exist.")
 
-    @modmailset_snippet.command(name="remove")
-    async def m_snippet_remove(self, ctx, name: str):
-        """Remove a custom snippet."""
+    @modmailset.command(name="snippet")
+    async def modmailset_snippet(self, ctx, name: str, is_anonymous: bool, *, text: str):
         name = name.lower()
-        async with self.config.guild(ctx.guild).snippets() as snippets:
-            if name in snippets:
-                del snippets[name]
-                await ctx.send(f"✅ Snippet `!{name}` removed.")
-            else:
-                await ctx.send("❌ Snippet not found.")
-                
-    @modmailset.group(name="immune")
-    async def modmailset_immune(self, ctx):
-        """Manage immune roles."""
-        pass
+        async with self.config.guild(ctx.guild).snippets() as snips:
+            snips[name] = {"anon": is_anonymous, "text": text}
+        await ctx.send(f"✅ Saved macro snippet `{name}`. Staff can now use `!{name}` to deploy.")
 
-    @modmailset_immune.command(name="add")
-    async def m_im_add(self, ctx, role: discord.Role):
-        async with self.config.guild(ctx.guild).immune_roles() as immune:
-            if role.id not in immune:
-                immune.append(role.id)
-                await ctx.send(f"✅ Members with **{role.name}** can no longer open tickets.")
-            else:
-                await ctx.send("❌ That role is already on the immune list.")
+    @modmailset.command(name="autoresponder")
+    async def modmailset_autoresponder(self, ctx, keyword: str, *, response: str):
+        keyword = keyword.lower()
+        async with self.config.guild(ctx.guild).auto_responders() as ar:
+            ar[keyword] = response
+        await ctx.send(f"✅ Automated trigger keyword `{keyword}` initialized and mapped.")
 
-    @modmailset_immune.command(name="remove")
-    async def m_im_remove(self, ctx, role: discord.Role):
-        async with self.config.guild(ctx.guild).immune_roles() as immune:
-            if role.id in immune:
-                immune.remove(role.id)
-                await ctx.send(f"✅ Removed **{role.name}** from the immune list.")
-            else:
-                await ctx.send("❌ That role is not on the immune list.")
+async def setup(bot):
+    await bot.add_cog(Modmail(bot))
