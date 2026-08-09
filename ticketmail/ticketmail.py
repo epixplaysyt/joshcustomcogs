@@ -139,7 +139,7 @@ class TicketConfirmationView(discord.ui.View):
             
         cancel_button = discord.ui.Button(
             label="Cancel", 
-            style=discord.ButtonStyle.danger, 
+            style=discord.ButtonStyle.danger,
             custom_id=f"cancel_{guild.id}_{user.id}"
         )
         cancel_button.callback = self.cancel_callback
@@ -221,7 +221,7 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "🔒 Secure and encrypted log archives"
+            "🔒 Securing the server..."
         ]
         self.status_index = 0
         
