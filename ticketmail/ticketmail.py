@@ -94,7 +94,7 @@ class EmbedBuilderView(discord.ui.View):
     async def save_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author: return
         
-        async with self.cog.config.guild(self.ctx.guild).departments() as deps:
+        async with self.cog..guild(self.ctx.guild).departments() as deps:
             if self.dept_name in deps:
                 deps[self.dept_name]["embed"] = self.current_embed.to_dict()
                 
@@ -123,14 +123,24 @@ class TicketConfirmationView(discord.ui.View):
         self.initial_message = initial_message
         self.message = None
 
-        for dept_name, dept_data in departments.items():
+        # Cycle through colors for buttons instead of all being green
+        button_styles = [
+            discord.ButtonStyle.primary,
+            discord.ButtonStyle.success,
+            discord.ButtonStyle.secondary,
+            discord.ButtonStyle.danger
+        ]
+
+        for idx, (dept_name, dept_data) in enumerate(departments.items()):
             emoji = None
             if isinstance(dept_data, dict):
                 emoji = dept_data.get("emoji")
                 
+            style = button_styles[idx % len(button_styles)]
+                
             button = discord.ui.Button(
-                label=f"{dept_name.title()} Department",
-                style=discord.ButtonStyle.success,
+                label=f"Open {dept_name.title()}",
+                style=style,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
                 emoji=emoji
             )
@@ -139,7 +149,7 @@ class TicketConfirmationView(discord.ui.View):
             
         cancel_button = discord.ui.Button(
             label="Cancel", 
-            style=discord.ButtonStyle.danger,
+            style=discord.ButtonStyle.danger, 
             custom_id=f"cancel_{guild.id}_{user.id}"
         )
         cancel_button.callback = self.cancel_callback
@@ -160,7 +170,7 @@ class TicketConfirmationView(discord.ui.View):
             if channel:
                 member = self.guild.get_member(self.user.id)
                 role_name = member.top_role.name if member else "User"
-                ticket_id = await self.cog.config.channel(channel).ticket_id() or "UNKNOWN"
+                ticket_id = await self.cog..channel(channel).ticket_id() or "UNKNOWN"
                 now = datetime.datetime.now(datetime.timezone.utc)
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                 
@@ -191,7 +201,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938473, force_registration=True)
+        self. = .get_conf(self, identifier=8472938473, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -208,7 +218,13 @@ class Modmail(commands.Cog):
             auto_responders={},
             snippets={}
         )
-        self.config.register_user(active_channel_id=None)
+        
+        self.config.register_user(
+            active_channel_id=None,
+            history_count=0,
+            last_ticket_time=None
+        )
+        
         self.config.register_channel(
             owner_id=None, 
             claimed_by=None, 
@@ -221,7 +237,7 @@ class Modmail(commands.Cog):
             "🙋 Waiting for support tickets...",
             "🛠️ Moderating the server...",
             "🎫 Need help? DM me to talk to staff!",
-            "🔒 Securing the server..."
+            "🔒 Secure and encrypted log archives"
         ]
         self.status_index = 0
         
@@ -388,12 +404,13 @@ class Modmail(commands.Cog):
                     date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                     ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
 
+                    # Changed from member.name to member.display_name for reaction forwarded embed
                     embed = discord.Embed(
                         description=f"Reacted with {emoji_str}",
                         color=discord.Color.green(),
                         timestamp=now
                     )
-                    embed.set_author(name=member.name if member else "Staff", icon_url=member.display_avatar.url if member else None)
+                    embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None)
                     embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
                     try:
@@ -426,6 +443,14 @@ class Modmail(commands.Cog):
                 await channel.set_permissions(dept_role, read_messages=True, send_messages=True)
 
         now = datetime.datetime.now(datetime.timezone.utc)
+        
+        # User Ticket History Update
+        history_count = await self.config.user(user).history_count()
+        last_ticket_time = await self.config.user(user).last_ticket_time()
+        
+        await self.config.user(user).history_count.set(history_count + 1)
+        await self.config.user(user).last_ticket_time.set(now.timestamp())
+        
         await self.config.user(user).active_channel_id.set(channel.id)
         await self.config.channel(channel).owner_id.set(user.id)
         await self.config.channel(channel).ticket_id.set(ticket_id)
@@ -448,6 +473,12 @@ class Modmail(commands.Cog):
             avg_str = f"~{int(avg_wait // 60)}m {int(avg_wait % 60)}s"
 
         created_at = f"<t:{int(user.created_at.timestamp())}:R>"
+        
+        if history_count == 0:
+            history_str = "First ticket! (0 previous)"
+        else:
+            last_time_str = f"<t:{int(last_ticket_time)}:R>" if last_ticket_time else "Unknown"
+            history_str = f"{history_count} previous ticket(s)\n**Last Ticket:** {last_time_str}"
 
         embed = discord.Embed(
             title=f"🎫 Ticket Created - {ticket_id}",
@@ -456,7 +487,8 @@ class Modmail(commands.Cog):
         )
         desc = (f"Support channel created for {user.mention} (`{user.id}`).\n\n"
                 f"**Ticket ID:** `{ticket_id}`\n"
-                f"**Account Created:** {created_at}\n\n"
+                f"**Account Created:** {created_at}\n"
+                f"**Past Tickets:** {history_str}\n\n"
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
                 f"Type here to reply, or use `!anon ` to send anonymous messages.\n"
                 f"Use `!n ` for internal notes that won't be sent to the user.")
@@ -586,6 +618,9 @@ class Modmail(commands.Cog):
             member_obj = guild.get_member(m.author.id)
             if member_obj:
                 role_str = member_obj.top_role.name
+                # Use display_name in transcripts for staff as well
+                if not m.author.bot:
+                    username = member_obj.display_name
 
             if m.author.bot and m.embeds:
                 embed_obj = m.embeds[0]
@@ -794,6 +829,10 @@ class Modmail(commands.Cog):
                 files_for_channel = [await a.to_file() for a in message.attachments]
                 files_for_user = [await a.to_file() for a in message.attachments]
 
+                member = message.guild.get_member(message.author.id)
+                # Pull the user's nickname if they have one, otherwise fallback to their global display name
+                staff_name = member.display_name if member else message.author.display_name
+
                 if is_note:
                     note_embed = discord.Embed(
                         title="📝 Internal Note", 
@@ -801,7 +840,7 @@ class Modmail(commands.Cog):
                         color=discord.Color.gold(),
                         timestamp=now
                     )
-                    note_embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                    note_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
                     await message.channel.send(embed=note_embed, files=files_for_channel)
                     return
 
@@ -821,7 +860,6 @@ class Modmail(commands.Cog):
                     return await message.channel.send(embed=warning_embed)
 
                 ticket_id = await self.config.channel(message.channel).ticket_id() or "UNKNOWN"
-                member = message.guild.get_member(message.author.id)
                 role_name = member.top_role.name if member else "Staff"
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
 
@@ -838,7 +876,7 @@ class Modmail(commands.Cog):
                         user_embed.set_author(name="Support Team", icon_url=guild_icon)
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                     else:
-                        user_embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                        user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
                     await user.send(embed=user_embed, files=files_for_user)
@@ -846,9 +884,9 @@ class Modmail(commands.Cog):
                     chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
                     
                     if is_anon:
-                        chan_embed.set_author(name=f"[Anonymous] {message.author.name}", icon_url=message.author.display_avatar.url)
+                        chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
                     else:
-                        chan_embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
+                        chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
                         
                     chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
@@ -880,8 +918,15 @@ class Modmail(commands.Cog):
         if not owner_id:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
         
-        await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.name}")
-        await interaction.response.send_message(f"✋ **{interaction.user.mention} is now handling this ticket.**")
+        # Uses display_name (nickname) instead of raw username
+        await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.display_name}")
+        
+        # Converted response to an Embed
+        embed = discord.Embed(
+            description=f"✋ **{interaction.user.mention} is now handling this ticket.**",
+            color=discord.Color.brand_green()
+        )
+        await interaction.response.send_message(embed=embed)
 
     @ticket_group.command(name="transfer", description="Move this ticket to another department.")
     @app_commands.describe(department="The name of the department to move this ticket to.")
@@ -917,7 +962,13 @@ class Modmail(commands.Cog):
 
         ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
         await self.config.channel(interaction.channel).department.set(department)
-        await interaction.response.send_message(f"✅ Ticket moved to the **{department.title()}** department.")
+        
+        # Converted response to an Embed
+        success_embed = discord.Embed(
+            description=f"✅ Ticket moved to the **{department.title()}** department.",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=success_embed)
 
         user = self.bot.get_user(owner_id)
         if user:
@@ -947,7 +998,12 @@ class Modmail(commands.Cog):
         if not owner_id:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        await interaction.response.send_message("🔒 Closing ticket and cleaning up...", ephemeral=True)
+        # Uses an embed for consistency
+        closing_embed = discord.Embed(
+            description="🔒 Closing ticket and archiving transcript...",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=closing_embed, ephemeral=True)
         
         ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
         user = self.bot.get_user(owner_id)
@@ -973,7 +1029,7 @@ class Modmail(commands.Cog):
                 date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
                 user_embed = discord.Embed(
                     title=f"🔒 Ticket Closed - {ticket_id}",
-                    description=f"Your ticket has been closed by **{interaction.user.name}**.",
+                    description=f"Your ticket has been closed by **{interaction.user.display_name}**.",
                     color=discord.Color.red(),
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
