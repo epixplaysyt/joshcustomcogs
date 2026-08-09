@@ -94,7 +94,7 @@ class EmbedBuilderView(discord.ui.View):
     async def save_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author: return
         
-        async with self.cog.guild(self.ctx.guild).departments() as deps:
+        async with self.cog.config.guild(self.ctx.guild).departments() as deps:
             if self.dept_name in deps:
                 deps[self.dept_name]["embed"] = self.current_embed.to_dict()
                 
@@ -122,7 +122,7 @@ class TicketConfirmationView(discord.ui.View):
         self.guild = guild
         self.initial_message = initial_message
         self.message = None
-        
+
         button_styles = [
             discord.ButtonStyle.primary,
             discord.ButtonStyle.success,
@@ -169,7 +169,7 @@ class TicketConfirmationView(discord.ui.View):
             if channel:
                 member = self.guild.get_member(self.user.id)
                 role_name = member.top_role.name if member else "User"
-                ticket_id = await self.cog.channel(channel).ticket_id() or "UNKNOWN"
+                ticket_id = await self.cog.config.channel(channel).ticket_id() or "UNKNOWN"
                 now = datetime.datetime.now(datetime.timezone.utc)
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                 
@@ -200,7 +200,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self. = .get_conf(self, identifier=8472938473, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -914,6 +914,7 @@ class Modmail(commands.Cog):
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
         
         await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.display_name}")
+        
         embed = discord.Embed(
             description=f"✋ **{interaction.user.mention} is now handling this ticket.**",
             color=discord.Color.brand_green()
