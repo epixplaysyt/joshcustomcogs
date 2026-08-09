@@ -5,6 +5,117 @@ from discord.ext import tasks
 import io
 import datetime
 
+# --- UI Builder Classes ---
+
+class EmbedTextModal(discord.ui.Modal, title='Edit Embed Text'):
+    emb_title = discord.ui.TextInput(label='Title', style=discord.TextStyle.short, required=False, max_length=256)
+    emb_desc = discord.ui.TextInput(label='Description', style=discord.TextStyle.paragraph, required=False, max_length=4000)
+
+    def __init__(self, view: 'EmbedBuilderView'):
+        super().__init__()
+        self.view_obj = view
+        self.emb_title.default = view.current_embed.title if view.current_embed.title else ""
+        self.emb_desc.default = view.current_embed.description if view.current_embed.description else ""
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.view_obj.current_embed.title = self.emb_title.value or None
+        self.view_obj.current_embed.description = self.emb_desc.value or None
+        if not self.view_obj.current_embed.title and not self.view_obj.current_embed.description:
+            self.view_obj.current_embed.description = "*(Empty Embed)*"
+        await self.view_obj.update_message(interaction)
+
+class EmbedStyleModal(discord.ui.Modal, title='Edit Embed Style'):
+    emb_color = discord.ui.TextInput(label='Hex Color (e.g., FF0000)', style=discord.TextStyle.short, required=False, max_length=7)
+    emb_footer = discord.ui.TextInput(label='Footer Text', style=discord.TextStyle.short, required=False, max_length=2048)
+    emb_thumb = discord.ui.TextInput(label='Thumbnail URL (Must be a valid image link)', style=discord.TextStyle.short, required=False)
+
+    def __init__(self, view: 'EmbedBuilderView'):
+        super().__init__()
+        self.view_obj = view
+        
+        current_color = str(hex(view.current_embed.color.value)).replace("0x", "") if view.current_embed.color else ""
+        self.emb_color.default = current_color
+        
+        self.emb_footer.default = view.current_embed.footer.text if view.current_embed.footer else ""
+        self.emb_thumb.default = view.current_embed.thumbnail.url if view.current_embed.thumbnail else ""
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.emb_color.value:
+            try:
+                clean_hex = self.emb_color.value.replace("#", "")
+                self.view_obj.current_embed.color = discord.Color(int(clean_hex, 16))
+            except ValueError:
+                pass 
+        else:
+            self.view_obj.current_embed.color = None
+
+        if self.emb_footer.value:
+            self.view_obj.current_embed.set_footer(text=self.emb_footer.value)
+        else:
+            self.view_obj.current_embed.remove_footer()
+
+        if self.emb_thumb.value:
+            self.view_obj.current_embed.set_thumbnail(url=self.emb_thumb.value)
+        else:
+            self.view_obj.current_embed.set_thumbnail(url=None)
+
+        await self.view_obj.update_message(interaction)
+
+class EmbedBuilderView(discord.ui.View):
+    def __init__(self, cog, ctx, dept_name, existing_embed_dict):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.ctx = ctx
+        self.dept_name = dept_name
+        
+        if existing_embed_dict:
+            self.current_embed = discord.Embed.from_dict(existing_embed_dict)
+        else:
+            self.current_embed = discord.Embed(
+                title=f"Welcome to {dept_name.title()} Support", 
+                description="Please describe your issue here.",
+                color=discord.Color.blue()
+            )
+            
+        self.message = None
+
+    async def update_message(self, interaction):
+        await interaction.response.edit_message(content="**Interactive Embed Builder**\nPreview:", embed=self.current_embed, view=self)
+
+    @discord.ui.button(label="Edit Text", style=discord.ButtonStyle.primary, emoji="📝")
+    async def edit_text(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        await interaction.response.send_modal(EmbedTextModal(self))
+
+    @discord.ui.button(label="Edit Style & Images", style=discord.ButtonStyle.secondary, emoji="🎨")
+    async def edit_style(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        await interaction.response.send_modal(EmbedStyleModal(self))
+
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.success, emoji="✅")
+    async def save_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        
+        async with self.cog.config.guild(self.ctx.guild).departments() as deps:
+            if self.dept_name in deps:
+                deps[self.dept_name]["embed"] = self.current_embed.to_dict()
+                
+        self.stop()
+        await interaction.response.edit_message(content=f"✅ **Saved!** The custom greeting embed for **{self.dept_name.title()}** has been updated.", view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel_builder(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        self.stop()
+        await interaction.response.edit_message(content="❌ **Cancelled.** No changes were saved.", embed=None, view=None)
+
+    async def on_timeout(self):
+        try:
+            if self.message:
+                await self.message.edit(content="⏳ Builder timed out. Unsaved changes were discarded.", view=None)
+        except Exception:
+            pass
+
 class TicketConfirmationView(discord.ui.View):
     def __init__(self, cog, user: discord.User, guild: discord.Guild, initial_message: discord.Message, departments: dict):
         super().__init__(timeout=180)
@@ -20,7 +131,7 @@ class TicketConfirmationView(discord.ui.View):
                 emoji = dept_data.get("emoji")
                 
             button = discord.ui.Button(
-                label=f"Open {dept_name.title()}",
+                label=f"{dept_name.title()} Department",
                 style=discord.ButtonStyle.success,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
                 emoji=emoji
@@ -80,6 +191,8 @@ class TicketConfirmationView(discord.ui.View):
             pass
 
 
+# --- Main Cog ---
+
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -92,7 +205,7 @@ class Modmail(commands.Cog):
             immune_roles=[],
             blocked_users=[],
             ticket_counter=1000,
-            departments={"general": {"category_id": None, "emoji": None, "message": None}},
+            departments={"general": {"category_id": None, "emoji": None, "embed": None}},
             support_hours={"start": None, "end": None},
             response_stats={},
             busy_mode=False,
@@ -299,7 +412,6 @@ class Modmail(commands.Cog):
             
         dept_data = departments.get(department)
         category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else (dept_data if isinstance(dept_data, int) else None)
-        custom_message = dept_data.get("message") if isinstance(dept_data, dict) else None
         category = guild.get_channel(category_id) if category_id else None
 
         counter = await self.config.guild(guild).ticket_counter() + 1
@@ -360,6 +472,7 @@ class Modmail(commands.Cog):
         await channel.send(embed=embed)
         
         try:
+            # 1. Send the standard system confirmation embed
             user_embed = discord.Embed(
                 title=f"✅ Ticket Opened ({ticket_id})",
                 description=f"You are connected to the **{department.title()}** department.",
@@ -367,9 +480,6 @@ class Modmail(commands.Cog):
                 timestamp=now
             )
             
-            if custom_message:
-                user_embed.add_field(name="Department Message", value=custom_message, inline=False)
-                
             user_embed.add_field(
                 name=f"Expected Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'})",
                 value=f"`{avg_str}`",
@@ -389,7 +499,14 @@ class Modmail(commands.Cog):
                     value=f"We are currently closed. The team will review your request when online <t:{next_open}:R>.",
                     inline=False
                 )
+            
             await user.send(embed=user_embed)
+
+            # 2. Send the Custom Department Embed if one exists
+            dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
+            if dept_embed_dict:
+                custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
+                await user.send(embed=custom_greeting_embed)
             
             if initial_message_content:
                 matched_response = None
@@ -600,7 +717,7 @@ class Modmail(commands.Cog):
 
                 departments = await self.config.guild(guild).departments()
                 if not isinstance(departments, dict) or not departments:
-                    departments = {"general": {"category_id": None, "emoji": None, "message": None}}
+                    departments = {"general": {"category_id": None, "emoji": None, "embed": None}}
                 
                 if len(departments) == 1:
                     dept_name = list(departments.keys())[0]
@@ -644,7 +761,6 @@ class Modmail(commands.Cog):
         else:
             owner_id = await self.config.channel(message.channel).owner_id()
             if owner_id:
-                # Intercept logic for standard messages, snippets, notes, and anons
                 ctx = await self.bot.get_context(message)
                 
                 is_anon = False
@@ -658,7 +774,6 @@ class Modmail(commands.Cog):
                     is_note = True
                     clean_content = message.content[3:].strip()
                 elif message.content.startswith("!"):
-                    # Check for snippet commands
                     snippets = await self.config.guild(message.guild).snippets()
                     first_word = message.content.split()[0][1:]
                     if first_word in snippets:
@@ -666,9 +781,9 @@ class Modmail(commands.Cog):
                         is_anon = snippet.get("anon", False)
                         clean_content = snippet.get("text", "")
                     elif ctx.valid:
-                        return  # It's a valid redbot command and not a snippet
+                        return  
                 elif ctx.valid:
-                    return  # It's a valid redbot command without our prefix triggers
+                    return  
 
                 try:
                     await message.delete()
@@ -784,7 +899,6 @@ class Modmail(commands.Cog):
 
         dept_data = departments[department]
         category_id = dept_data.get("category_id") if isinstance(dept_data, dict) else dept_data
-        custom_msg = dept_data.get("message") if isinstance(dept_data, dict) else None
         
         category = interaction.guild.get_channel(category_id) if category_id else None
 
@@ -805,10 +919,14 @@ class Modmail(commands.Cog):
                     color=discord.Color.orange(),
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
-                if custom_msg:
-                    embed.add_field(name="Department Message", value=custom_msg, inline=False)
                 embed.set_footer(text="A specialized support member will be with you shortly.")
                 await user.send(embed=embed)
+
+                dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
+                if dept_embed_dict:
+                    custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
+                    await user.send(embed=custom_greeting_embed)
+
             except discord.Forbidden:
                 pass
 
@@ -917,7 +1035,7 @@ class Modmail(commands.Cog):
             if not isinstance(deps, dict):
                 deps = {}
             if name not in deps or not isinstance(deps[name], dict):
-                deps[name] = {"category_id": category.id, "emoji": None, "message": None}
+                deps[name] = {"category_id": category.id, "emoji": None, "embed": None}
             else:
                 deps[name]["category_id"] = category.id
         await ctx.send(f"✅ Department **{name.title()}** linked to **{category.name}**.")
@@ -930,26 +1048,29 @@ class Modmail(commands.Cog):
             if name not in deps:
                 return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
             if not isinstance(deps[name], dict):
-                deps[name] = {"category_id": deps[name], "emoji": emoji, "message": None}
+                deps[name] = {"category_id": deps[name], "emoji": emoji, "embed": None}
             else:
                 deps[name]["emoji"] = emoji
         await ctx.send(f"✅ Set the emoji for **{name.title()}** to {emoji if emoji else 'None'}.")
 
     @modmailset_department.command(name="message")
-    async def m_dep_msg(self, ctx, name: str, *, message: str = None):
-        """Set a custom embed message to send when a user connects/transfers to this department."""
+    async def m_dep_msg(self, ctx, name: str):
+        """Open the interactive embed builder to create a greeting for a department."""
         name = name.lower()
-        async with self.config.guild(ctx.guild).departments() as deps:
-            if name not in deps:
-                return await ctx.send(f"❌ Department `{name.title()}` does not exist.")
-            if not isinstance(deps[name], dict):
-                deps[name] = {"category_id": deps[name], "emoji": None, "message": message}
-            else:
-                deps[name]["message"] = message
-        if message:
-            await ctx.send(f"✅ Custom message for **{name.title()}** set.")
-        else:
-            await ctx.send(f"✅ Custom message for **{name.title()}** removed.")
+        departments = await self.config.guild(ctx.guild).departments()
+        
+        if not isinstance(departments, dict) or name not in departments:
+            return await ctx.send(f"❌ Department `{name.title()}` does not exist. Please create it first.")
+
+        existing_embed_dict = departments[name].get("embed")
+        
+        view = EmbedBuilderView(self, ctx, name, existing_embed_dict)
+        msg = await ctx.send(
+            content="**Interactive Embed Builder**\nPreview:", 
+            embed=view.current_embed, 
+            view=view
+        )
+        view.message = msg
 
     @modmailset.group(name="autoresponder")
     async def modmailset_autoresponder(self, ctx):
