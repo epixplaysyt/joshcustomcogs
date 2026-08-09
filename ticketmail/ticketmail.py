@@ -94,7 +94,7 @@ class EmbedBuilderView(discord.ui.View):
     async def save_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author: return
         
-        async with self.cog..guild(self.ctx.guild).departments() as deps:
+        async with self.cog.guild(self.ctx.guild).departments() as deps:
             if self.dept_name in deps:
                 deps[self.dept_name]["embed"] = self.current_embed.to_dict()
                 
