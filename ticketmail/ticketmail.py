@@ -137,7 +137,7 @@ class TicketConfirmationView(discord.ui.View):
             style = button_styles[idx % len(button_styles)]
                 
             button = discord.ui.Button(
-                label=f"Open {dept_name.title()}",
+                label=f"{dept_name.title()} Department",
                 style=style,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
                 emoji=emoji
