@@ -169,7 +169,7 @@ class TicketConfirmationView(discord.ui.View):
             if channel:
                 member = self.guild.get_member(self.user.id)
                 role_name = member.top_role.name if member else "User"
-                ticket_id = await self.cog..channel(channel).ticket_id() or "UNKNOWN"
+                ticket_id = await self.cog.channel(channel).ticket_id() or "UNKNOWN"
                 now = datetime.datetime.now(datetime.timezone.utc)
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                 
