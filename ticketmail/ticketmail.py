@@ -209,7 +209,7 @@ class Modmail(commands.Cog):
             immune_roles=[],
             blocked_users=[],
             ticket_counter=1000,
-            departments={"general": {"role_id": None, "emoji": None, "embed": None}},
+            departments={"general": {"role_id": None, "emoji": None, "embed": {}}},
             support_hours={"start": None, "end": None},
             response_stats={},
             busy_mode=False,
