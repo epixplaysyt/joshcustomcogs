@@ -576,34 +576,34 @@ class ScoreMailer(commands.Cog):
         for page in pagify(text):
             await ctx.send(page)
 
-    @commands.command()
+@commands.command()
     @commands.guild_only()
     @has_app_role()
-    async def addsuccess(self, ctx, *, username: str):
+    async def addsuccess(self, ctx, user: discord.Member):
         apps = await self.config.guild(ctx.guild).apps()
         if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
             
         async with self.config.guild(ctx.guild).manual_success() as manual:
-            if username.lower() not in manual:
-                manual.append(username.lower())
+            if user.id not in manual:
+                manual.append(user.id)
                 
-        await ctx.send(f"✅ **{username}** has been manually added to the successful candidates list.")
+        await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been manually added to the successful candidates list.")
 
     @commands.command()
     @commands.guild_only()
     @has_app_role()
-    async def removesuccess(self, ctx, *, username: str):
+    async def removesuccess(self, ctx, user: discord.Member):
         apps = await self.config.guild(ctx.guild).apps()
         if not apps:
             return await ctx.send("No applications have been uploaded for this server yet.")
             
         async with self.config.guild(ctx.guild).manual_success() as manual:
-            if username.lower() in manual:
-                manual.remove(username.lower())
-                await ctx.send(f"✅ **{username}** has been removed from the manual successful candidates list.")
+            if user.id in manual:
+                manual.remove(user.id)
+                await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been removed from the manual successful candidates list.")
             else:
-                await ctx.send(f"❌ **{username}** is not in the manual successful candidates list.")
+                await ctx.send(f"❌ **{user.display_name}** is not in the manual successful candidates list.")
 
     @commands.command()
     @commands.guild_only()
@@ -644,9 +644,13 @@ class ScoreMailer(commands.Cog):
                 continue
                 
             is_successful = False
+            
+            # Check if they have enough votes
             if reader_count > 0 and len(app["votes"]) >= reader_count:
                 is_successful = True
-            if username.lower() in manual_success:
+                
+            # Check if they were manually added (Supports new ID method and old username method)
+            if member.id in manual_success or str(member.id) in manual_success or username.lower() in manual_success:
                 is_successful = True
                 
             if is_successful and member not in successful_dms:
@@ -725,7 +729,6 @@ class ScoreMailer(commands.Cog):
                 dm_errors += 1
 
         await msg.edit(content=f"✅ **Done!**\nSuccessfully sent **{successful_sent}** acceptance DMs and **{failed_sent}** rejection DMs.\nFailed to send **{dm_errors}** DMs (users likely have DMs disabled).")
-
     @commands.command()
     @commands.guild_only()
     @has_app_role()
