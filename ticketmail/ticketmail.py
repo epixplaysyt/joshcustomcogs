@@ -718,7 +718,8 @@ class Modmail(commands.Cog):
                 reply_author, reply_text = await self._get_reply_context(message)
 
                 files = [await a.to_file() for a in message.attachments]
-                embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
+                embed_desc = message.content if message.content else None
+                embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
                 embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
                 embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
@@ -780,7 +781,8 @@ class Modmail(commands.Cog):
                             reply_author, reply_text = await self._get_reply_context(message)
 
                             files = [await a.to_file() for a in message.attachments]
-                            embed = discord.Embed(description=message.content, color=discord.Color.blue(), timestamp=now)
+                            embed_desc = message.content if message.content else None
+                            embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
                             embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
                             embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                             
@@ -842,26 +844,37 @@ class Modmail(commands.Cog):
                 elif ctx.valid:
                     return  
 
+                # FIX: Fetch files into memory BEFORE deleting the original message
+                attachments_data = []
+                for a in message.attachments:
+                    try:
+                        bytes_data = await a.read()
+                        attachments_data.append((bytes_data, a.filename))
+                    except Exception as e:
+                        print(f"[Modmail] Failed to cache attachment: {e}")
+
                 try:
                     await message.delete()
                 except (discord.Forbidden, discord.NotFound):
                     pass
 
-                files_for_channel = [await a.to_file() for a in message.attachments]
-                files_for_user = [await a.to_file() for a in message.attachments]
+                def get_files():
+                    return [discord.File(io.BytesIO(b), filename=fn) for b, fn in attachments_data]
 
                 member = message.guild.get_member(message.author.id)
                 staff_name = member.display_name if member else message.author.display_name
+                
+                embed_desc = clean_content if clean_content else None
 
                 if is_note:
                     note_embed = discord.Embed(
                         title="📝 Internal Note", 
-                        description=clean_content, 
+                        description=embed_desc, 
                         color=discord.Color.gold(),
                         timestamp=now
                     )
                     note_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
-                    await message.channel.send(embed=note_embed, files=files_for_channel)
+                    await message.channel.send(embed=note_embed, files=get_files())
 
                     pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
                     if pings:
@@ -894,7 +907,7 @@ class Modmail(commands.Cog):
                 reply_author, reply_text = await self._get_reply_context(message)
 
                 try:
-                    user_embed = discord.Embed(description=clean_content, color=discord.Color.green(), timestamp=now)
+                    user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
                     
                     if reply_author and reply_text:
                         user_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
@@ -907,9 +920,9 @@ class Modmail(commands.Cog):
                         user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
-                    await user.send(embed=user_embed, files=files_for_user)
+                    await user.send(embed=user_embed, files=get_files())
 
-                    chan_embed = discord.Embed(description=clean_content, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
+                    chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
                     
                     if is_anon:
                         chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
@@ -921,7 +934,7 @@ class Modmail(commands.Cog):
                     if reply_author and reply_text:
                         chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
                         
-                    await message.channel.send(embed=chan_embed, files=files_for_channel)
+                    await message.channel.send(embed=chan_embed, files=get_files())
 
                     pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
                     if pings:
