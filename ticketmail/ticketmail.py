@@ -182,6 +182,15 @@ class TicketConfirmationView(discord.ui.View):
                 embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
                 await channel.send(embed=embed, files=files)
+
+                pings = [m.mention for m in self.initial_message.mentions]
+                if pings:
+                    try:
+                        ghost = await channel.send(" ".join(pings))
+                        await ghost.delete()
+                    except Exception:
+                        pass
+
                 await interaction.message.edit(content=f"✅ **Ticket {ticket_id} opened successfully!**", view=None)
         return callback
 
@@ -199,7 +208,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -433,10 +442,12 @@ class Modmail(commands.Cog):
         channel_name = f"{ticket_id.lower()}-{user.name}".lower().replace(" ", "-")
         channel = await guild.create_text_channel(name=channel_name, category=category)
 
+        role_mention = None
         if role_id:
             dept_role = guild.get_role(role_id)
             if dept_role:
                 await channel.set_permissions(dept_role, read_messages=True, send_messages=True)
+                role_mention = dept_role.mention
 
         now = datetime.datetime.now(datetime.timezone.utc)
         
@@ -499,7 +510,7 @@ class Modmail(commands.Cog):
 
         embed.description = desc
         embed.set_thumbnail(url=user.display_avatar.url)
-        await channel.send(embed=embed)
+        await channel.send(content=role_mention, embed=embed)
         
         try:
             user_embed = discord.Embed(
@@ -716,6 +727,14 @@ class Modmail(commands.Cog):
 
                 await channel.send(embed=embed, files=files)
                 await message.add_reaction("✅")
+
+                pings = [m.mention for m in message.mentions]
+                if pings:
+                    try:
+                        ghost = await channel.send(" ".join(pings))
+                        await ghost.delete()
+                    except Exception:
+                        pass
             else:
                 if active_channel_id:
                     await self.config.user(message.author).active_channel_id.set(None)
@@ -747,7 +766,7 @@ class Modmail(commands.Cog):
 
                 departments = await self.config.guild(guild).departments()
                 if not isinstance(departments, dict) or not departments:
-                    departments = {"general": {"role_id": None, "emoji": None, "embed": None}}
+                    departments = {"general": {"role_id": None, "emoji": None, "embed": {}}}
                 
                 if len(departments) == 1:
                     dept_name = list(departments.keys())[0]
@@ -770,6 +789,14 @@ class Modmail(commands.Cog):
 
                             await channel.send(embed=embed, files=files)
                             await message.add_reaction("✅")
+
+                            pings = [m.mention for m in message.mentions]
+                            if pings:
+                                try:
+                                    ghost = await channel.send(" ".join(pings))
+                                    await ghost.delete()
+                                except Exception:
+                                    pass
                     except Exception as e:
                         print(f"[Modmail Error] Automatic ticket execution dropped: {e}")
                     return
@@ -835,6 +862,14 @@ class Modmail(commands.Cog):
                     )
                     note_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
                     await message.channel.send(embed=note_embed, files=files_for_channel)
+
+                    pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
+                    if pings:
+                        try:
+                            ghost = await message.channel.send(" ".join(pings))
+                            await ghost.delete()
+                        except Exception:
+                            pass
                     return
 
                 waiting_since = await self.config.channel(message.channel).waiting_since()
@@ -887,6 +922,14 @@ class Modmail(commands.Cog):
                         chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
                         
                     await message.channel.send(embed=chan_embed, files=files_for_channel)
+
+                    pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
+                    if pings:
+                        try:
+                            ghost = await message.channel.send(" ".join(pings))
+                            await ghost.delete()
+                        except Exception:
+                            pass
 
                 except discord.Forbidden:
                     error_embed = discord.Embed(description="❌ Error: The user has DMs disabled.", color=discord.Color.red())
@@ -1091,7 +1134,7 @@ class Modmail(commands.Cog):
             if not isinstance(deps, dict):
                 deps = {}
             if name not in deps or not isinstance(deps[name], dict):
-                deps[name] = {"role_id": role.id, "emoji": None, "embed": None}
+                deps[name] = {"role_id": role.id, "emoji": None, "embed": {}}
             else:
                 deps[name]["role_id"] = role.id
         await ctx.send(f"✅ Department **{name.title()}** is now securely handled by the **{role.name}** role.")
