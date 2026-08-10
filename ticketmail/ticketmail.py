@@ -137,7 +137,7 @@ class TicketConfirmationView(discord.ui.View):
             style = button_styles[idx % len(button_styles)]
                 
             button = discord.ui.Button(
-                label=f"{dept_name.title()} Department",
+                label=f"Open {dept_name.title()}",
                 style=style,
                 custom_id=f"confirm_{guild.id}_{user.id}_{dept_name}",
                 emoji=emoji
@@ -208,7 +208,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -234,6 +234,7 @@ class Modmail(commands.Cog):
         
         self.config.register_channel(
             owner_id=None, 
+            owner_ids=[],
             claimed_by=None, 
             ticket_id=None,
             department=None,
@@ -395,33 +396,104 @@ class Modmail(commands.Cog):
                     await ticket_channel.send(embed=embed)
 
         else:
-            owner_id = await self.config.channel_from_id(payload.channel_id).owner_id()
-            if owner_id:
-                user = self.bot.get_user(owner_id)
-                if user:
-                    guild = self.bot.get_guild(payload.guild_id)
-                    member = payload.member or (guild.get_member(payload.user_id) if guild else None)
-                    if member and member.bot:
-                        return
-                    
-                    role_name = member.top_role.name if member else "Staff"
-                    emoji_str = str(payload.emoji)
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
-                    ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
+            owner_ids = await self.config.channel_from_id(payload.channel_id).owner_ids()
+            legacy_id = await self.config.channel_from_id(payload.channel_id).owner_id()
+            target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+            
+            if target_ids:
+                guild = self.bot.get_guild(payload.guild_id)
+                member = payload.member or (guild.get_member(payload.user_id) if guild else None)
+                if member and member.bot:
+                    return
+                
+                role_name = member.top_role.name if member else "Staff"
+                emoji_str = str(payload.emoji)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
+                ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
 
-                    embed = discord.Embed(
-                        description=f"Reacted with {emoji_str}",
-                        color=discord.Color.green(),
-                        timestamp=now
-                    )
-                    embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None)
-                    embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-                    
-                    try:
-                        await user.send(embed=embed)
-                    except discord.Forbidden:
-                        pass
+                embed = discord.Embed(
+                    description=f"Reacted with {emoji_str}",
+                    color=discord.Color.green(),
+                    timestamp=now
+                )
+                embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None)
+                embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                
+                for uid in target_ids:
+                    user = self.bot.get_user(uid)
+                    if user:
+                        try:
+                            await user.send(embed=embed)
+                        except discord.Forbidden:
+                            pass
+
+    async def _create_group_ticket(self, guild: discord.Guild, users: list, department: str = "general"):
+        departments = await self.config.guild(guild).departments()
+        if not isinstance(departments, dict) or department not in departments:
+            department = "general"
+            
+        dept_data = departments.get(department)
+        role_id = dept_data.get("role_id") if isinstance(dept_data, dict) else None
+        
+        master_category_id = await self.config.guild(guild).ticket_category_id()
+        category = guild.get_channel(master_category_id) if master_category_id else None
+
+        counter = await self.config.guild(guild).ticket_counter() + 1
+        await self.config.guild(guild).ticket_counter.set(counter)
+        prefix = department[0].upper() if department else "G"
+        ticket_id = f"{prefix}{counter}"
+
+        channel_name = f"{ticket_id.lower()}-group"
+        channel = await guild.create_text_channel(name=channel_name, category=category)
+
+        role_mention = None
+        if role_id:
+            dept_role = guild.get_role(role_id)
+            if dept_role:
+                await channel.set_permissions(dept_role, read_messages=True, send_messages=True)
+                role_mention = dept_role.mention
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        
+        owner_ids = []
+        users_desc = ""
+        for user in users:
+            owner_ids.append(user.id)
+            await self.config.user(user).active_channel_id.set(channel.id)
+            users_desc += f"{user.mention} (`{user.id}`)\n"
+
+        await self.config.channel(channel).owner_ids.set(owner_ids)
+        await self.config.channel(channel).ticket_id.set(ticket_id)
+        await self.config.channel(channel).department.set(department)
+        await self.config.channel(channel).waiting_since.set(now.timestamp())
+
+        embed = discord.Embed(
+            title=f"🎫 Group Ticket Created - {ticket_id}",
+            color=discord.Color.green(),
+            timestamp=now
+        )
+        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nType here to reply to all users simultaneously. Users will not know who else is in the ticket."
+        await channel.send(content=role_mention, embed=embed)
+        
+        for user in users:
+            try:
+                user_embed = discord.Embed(
+                    title=f"✅ Ticket Opened ({ticket_id})",
+                    description=f"You are connected to the **{department.title()}** department.",
+                    color=discord.Color.green(),
+                    timestamp=now
+                )
+                await user.send(embed=user_embed)
+
+                dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
+                if dept_embed_dict:
+                    custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
+                    await user.send(embed=custom_greeting_embed)
+            except discord.Forbidden:
+                await channel.send(f"⚠️ **Warning:** Could not DM {user.name}.")
+
+        return channel
 
     async def _create_ticket(self, guild: discord.Guild, user: discord.User, department: str = "general", initial_message_content: str = ""):
         departments = await self.config.guild(guild).departments()
@@ -459,6 +531,7 @@ class Modmail(commands.Cog):
         
         await self.config.user(user).active_channel_id.set(channel.id)
         await self.config.channel(channel).owner_id.set(user.id)
+        await self.config.channel(channel).owner_ids.set([user.id])
         await self.config.channel(channel).ticket_id.set(ticket_id)
         await self.config.channel(channel).department.set(department)
         await self.config.channel(channel).waiting_since.set(now.timestamp())
@@ -576,7 +649,7 @@ class Modmail(commands.Cog):
 
         return channel
 
-    async def _generate_html_transcript(self, channel: discord.TextChannel, owner: discord.User, closer: discord.Member, reason: str, ticket_id: str) -> discord.File:
+    async def _generate_html_transcript(self, channel: discord.TextChannel, owners_text: str, closer: discord.Member, reason: str, ticket_id: str) -> discord.File:
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -602,7 +675,7 @@ class Modmail(commands.Cog):
             <div class="header">
                 <h1>Transcript Ticket Record: {ticket_id}</h1>
                 <p><strong>Channel Name:</strong> {channel.name}</p>
-                <p><strong>User:</strong> {owner.name} ({owner.id})</p>
+                <p><strong>Users:</strong> {owners_text}</p>
                 <p><strong>Closed By:</strong> {closer.name} ({closer.id})</p>
                 <p><strong>Reason:</strong> {reason}</p>
                 <p><strong>Date Saved:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
@@ -818,8 +891,11 @@ class Modmail(commands.Cog):
                     pass
 
         else:
-            owner_id = await self.config.channel(message.channel).owner_id()
-            if owner_id:
+            owner_ids = await self.config.channel(message.channel).owner_ids()
+            legacy_id = await self.config.channel(message.channel).owner_id()
+            target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+            
+            if target_ids:
                 ctx = await self.bot.get_context(message)
                 
                 is_anon = False
@@ -844,7 +920,6 @@ class Modmail(commands.Cog):
                 elif ctx.valid:
                     return  
 
-                # FIX: Fetch files into memory BEFORE deleting the original message
                 attachments_data = []
                 for a in message.attachments:
                     try:
@@ -895,58 +970,54 @@ class Modmail(commands.Cog):
                     await self.update_average(message.guild, dept, wait_time, was_in_hours)
                     await self.config.channel(message.channel).waiting_since.set(None)
 
-                user = self.bot.get_user(owner_id)
-                if not user:
-                    warning_embed = discord.Embed(description="⚠️ Error: User not found. They may have left the server.", color=discord.Color.red())
-                    return await message.channel.send(embed=warning_embed)
-
                 ticket_id = await self.config.channel(message.channel).ticket_id() or "UNKNOWN"
                 role_name = member.top_role.name if member else "Staff"
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
-
                 reply_author, reply_text = await self._get_reply_context(message)
 
-                try:
-                    user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
-                    
-                    if reply_author and reply_text:
-                        user_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
-
-                    if is_anon:
-                        guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
-                        user_embed.set_author(name="Support Team", icon_url=guild_icon)
-                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
-                    else:
-                        user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
-                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-                    
-                    await user.send(embed=user_embed, files=get_files())
-
-                    chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
-                    
-                    if is_anon:
-                        chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
-                    else:
-                        chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
-                        
-                    chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-                    
-                    if reply_author and reply_text:
-                        chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
-                        
-                    await message.channel.send(embed=chan_embed, files=get_files())
-
-                    pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
-                    if pings:
+                for uid in target_ids:
+                    user = self.bot.get_user(uid)
+                    if user:
                         try:
-                            ghost = await message.channel.send(" ".join(pings))
-                            await ghost.delete()
-                        except Exception:
-                            pass
+                            user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
+                            
+                            if reply_author and reply_text:
+                                user_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
 
-                except discord.Forbidden:
-                    error_embed = discord.Embed(description="❌ Error: The user has DMs disabled.", color=discord.Color.red())
-                    await message.channel.send(embed=error_embed)
+                            if is_anon:
+                                guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
+                                user_embed.set_author(name="Support Team", icon_url=guild_icon)
+                                user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
+                            else:
+                                user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
+                                user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                            
+                            await user.send(embed=user_embed, files=get_files())
+                        except discord.Forbidden:
+                            error_embed = discord.Embed(description=f"❌ Error: Could not DM <@{uid}>.", color=discord.Color.red())
+                            await message.channel.send(embed=error_embed)
+
+                chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
+                
+                if is_anon:
+                    chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
+                else:
+                    chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
+                    
+                chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                
+                if reply_author and reply_text:
+                    chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
+                    
+                await message.channel.send(embed=chan_embed, files=get_files())
+
+                pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
+                if pings:
+                    try:
+                        ghost = await message.channel.send(" ".join(pings))
+                        await ghost.delete()
+                    except Exception:
+                        pass
 
     ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets")
 
@@ -960,11 +1031,37 @@ class Modmail(commands.Cog):
         channel = await self._create_ticket(interaction.guild, user, "general", "")
         await interaction.response.send_message(f"✅ Ticket channel created in {channel.mention}", ephemeral=True)
 
+    @ticket_group.command(name="group", description="Create a group ticket with multiple users.")
+    @app_commands.describe(user_ids="Space-separated list of user IDs")
+    @app_commands.default_permissions(manage_messages=True)
+    async def ticket_group_cmd(self, interaction: discord.Interaction, user_ids: str):
+        await interaction.response.defer(ephemeral=True)
+        ids = user_ids.split()
+        users = []
+        for i in ids:
+            try:
+                u = await self.bot.fetch_user(int(i))
+                users.append(u)
+            except Exception:
+                pass
+                
+        if not users:
+            return await interaction.followup.send("❌ No valid users found.")
+            
+        for u in users:
+            active_id = await self.config.user(u).active_channel_id()
+            if active_id and interaction.guild.get_channel(active_id):
+                return await interaction.followup.send(f"❌ User {u.name} already has an open ticket.")
+                
+        channel = await self._create_group_ticket(interaction.guild, users)
+        await interaction.followup.send(f"✅ Group ticket created: {channel.mention}")
+
     @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_claim(self, interaction: discord.Interaction):
-        owner_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_id:
+        owner_ids = await self.config.channel(interaction.channel).owner_ids()
+        legacy_id = await self.config.channel(interaction.channel).owner_id()
+        if not owner_ids and not legacy_id:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
         
         await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.display_name}")
@@ -979,8 +1076,11 @@ class Modmail(commands.Cog):
     @app_commands.describe(department="The name of the department to move this ticket to.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_transfer(self, interaction: discord.Interaction, department: str):
-        owner_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_id:
+        owner_ids = await self.config.channel(interaction.channel).owner_ids()
+        legacy_id = await self.config.channel(interaction.channel).owner_id()
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
         departments = await self.config.guild(interaction.guild).departments()
@@ -1016,32 +1116,36 @@ class Modmail(commands.Cog):
         )
         await interaction.response.send_message(embed=success_embed)
 
-        user = self.bot.get_user(owner_id)
-        if user:
-            try:
-                embed = discord.Embed(
-                    title="🔄 Department Transferred",
-                    description=f"Your open ticket (**{ticket_id}**) has been successfully moved to the **{department.title()}** department.",
-                    color=discord.Color.orange(),
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-                embed.set_footer(text="A specialized support member will be with you shortly.")
-                await user.send(embed=embed)
+        for uid in target_ids:
+            user = self.bot.get_user(uid)
+            if user:
+                try:
+                    embed = discord.Embed(
+                        title="🔄 Department Transferred",
+                        description=f"Your open ticket (**{ticket_id}**) has been successfully moved to the **{department.title()}** department.",
+                        color=discord.Color.orange(),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    embed.set_footer(text="A specialized support member will be with you shortly.")
+                    await user.send(embed=embed)
 
-                dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
-                if dept_embed_dict:
-                    custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
-                    await user.send(embed=custom_greeting_embed)
+                    dept_embed_dict = dept_data.get("embed") if isinstance(dept_data, dict) else None
+                    if dept_embed_dict:
+                        custom_greeting_embed = discord.Embed.from_dict(dept_embed_dict)
+                        await user.send(embed=custom_greeting_embed)
 
-            except discord.Forbidden:
-                pass
+                except discord.Forbidden:
+                    pass
 
     @ticket_group.command(name="close", description="Closed this ticket and save the transcript logs.")
     @app_commands.describe(reason="The reason for closing the ticket.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_close(self, interaction: discord.Interaction, reason: str):
-        owner_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_id:
+        owner_ids = await self.config.channel(interaction.channel).owner_ids()
+        legacy_id = await self.config.channel(interaction.channel).owner_id()
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
         closing_embed = discord.Embed(
@@ -1051,11 +1155,17 @@ class Modmail(commands.Cog):
         await interaction.response.send_message(embed=closing_embed, ephemeral=True)
         
         ticket_id = await self.config.channel(interaction.channel).ticket_id() or "UNKNOWN"
-        user = self.bot.get_user(owner_id)
-        owner_obj = user or discord.Object(id=owner_id)
-        owner_obj.name = user.name if user else "Offline Identity"
+        
+        owner_texts = []
+        for uid in target_ids:
+            u = self.bot.get_user(uid)
+            if u:
+                owner_texts.append(f"{u.name} ({u.id})")
+            else:
+                owner_texts.append(f"Offline User ({uid})")
+        owners_str = ", ".join(owner_texts)
 
-        transcript_file = await self._generate_html_transcript(interaction.channel, owner_obj, interaction.user, reason, ticket_id)
+        transcript_file = await self._generate_html_transcript(interaction.channel, owners_str, interaction.user, reason, ticket_id)
 
         log_channel_id = await self.config.guild(interaction.guild).log_channel_id()
         log_channel = interaction.guild.get_channel(log_channel_id) if log_channel_id else None
@@ -1063,28 +1173,30 @@ class Modmail(commands.Cog):
         if log_channel:
             date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
             embed = discord.Embed(title=f"🔒 Archived Ticket Record - {ticket_id}", color=discord.Color.red())
-            embed.add_field(name="User", value=f"<@{owner_id}> ({owner_id})")
+            embed.add_field(name="Users", value=owners_str)
             embed.add_field(name="Closed By", value=interaction.user.mention)
             embed.add_field(name="Reason", value=reason, inline=False)
             embed.set_footer(text=f"Archive Date: {date_str}")
             await log_channel.send(embed=embed, file=transcript_file)
 
-        if user:
-            try:
-                date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
-                user_embed = discord.Embed(
-                    title=f"🔒 Ticket Closed - {ticket_id}",
-                    description=f"Your ticket has been closed by **{interaction.user.display_name}**.",
-                    color=discord.Color.red(),
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-                user_embed.add_field(name="Reason", value=reason, inline=False)
-                user_embed.set_footer(text=f"Date: {date_str}")
-                await user.send(embed=user_embed)
-            except discord.Forbidden:
-                pass
+        for uid in target_ids:
+            user = self.bot.get_user(uid)
+            if user:
+                try:
+                    date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+                    user_embed = discord.Embed(
+                        title=f"🔒 Ticket Closed - {ticket_id}",
+                        description=f"Your ticket has been closed by **{interaction.user.display_name}**.",
+                        color=discord.Color.red(),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    user_embed.add_field(name="Reason", value=reason, inline=False)
+                    user_embed.set_footer(text=f"Date: {date_str}")
+                    await user.send(embed=user_embed)
+                except discord.Forbidden:
+                    pass
+            await self.config.user_from_id(uid).active_channel_id.set(None)
         
-        await self.config.user_from_id(owner_id).active_channel_id.set(None)
         await self.config.channel(interaction.channel).clear()
         await interaction.channel.delete(reason=f"Modmail closure by {interaction.user.name}")
 
