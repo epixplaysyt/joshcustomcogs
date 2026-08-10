@@ -4,7 +4,7 @@ from redbot.core import commands
 from redbot.core.bot import Red
 
 class JsonEmbeds(commands.Cog):
-    """Send custom embeds from JSON data."""
+    """Send raw JSON payloads directly to Discord."""
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -12,12 +12,6 @@ class JsonEmbeds(commands.Cog):
     @commands.command()
     @commands.mod_or_permissions(manage_messages=True)
     async def sendjson(self, ctx: commands.Context, *, json_data: str = None):
-        """
-        Send an embed built from JSON data.
-
-        You can either provide the JSON as a text argument (inside a code block)
-        or attach a `.json` file to your command message.
-        """
         if json_data is None:
             if ctx.message.attachments:
                 attachment = ctx.message.attachments[0]
@@ -31,6 +25,7 @@ class JsonEmbeds(commands.Cog):
             else:
                 return await ctx.send_help()
 
+        # Clean up Markdown code blocks
         json_data = json_data.strip()
         if json_data.startswith("```json"):
             json_data = json_data[7:]
@@ -43,28 +38,23 @@ class JsonEmbeds(commands.Cog):
         json_data = json_data.strip()
 
         try:
-            data = json.loads(json_data)
+            payload = json.loads(json_data)
         except json.JSONDecodeError as e:
             return await ctx.send(f"❌ **Invalid JSON format:**\n```py\n{e}\n```")
 
-        embed_dicts = []
-        if "embeds" in data:
-            embed_dicts = data["embeds"]
-        elif "embed" in data:
-            embed_dicts = [data["embed"]]
-        else:
-            embed_dicts = [data]
+        route = discord.http.Route(
+            "POST", 
+            "/channels/{channel_id}/messages", 
+            channel_id=ctx.channel.id
+        )
 
-        embeds = []
-        for edict in embed_dicts:
-            try:
-                embeds.append(discord.Embed.from_dict(edict))
-            except Exception as e:
-                return await ctx.send(f"❌ **Failed to parse embed data:**\n```py\n{e}\n```")
-
-        if not embeds:
-            return await ctx.send("❌ No valid embed data found in the JSON.")
         try:
-            await ctx.send(embeds=embeds[:10])
+            await self.bot.http.request(route, json=payload)
+            
+            try:
+                await ctx.message.add_reaction("✅")
+            except discord.HTTPException:
+                pass 
+                
         except discord.HTTPException as e:
-            await ctx.send(f"❌ **Discord rejected the embed.** Ensure you haven't exceeded character limits (e.g., descriptions over 4096 chars).\n```py\n{e}\n```")
+            await ctx.send(f"❌ **Discord API rejected the payload:**\n```py\n{e}\n```")
