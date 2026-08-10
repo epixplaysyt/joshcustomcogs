@@ -576,7 +576,7 @@ class ScoreMailer(commands.Cog):
         for page in pagify(text):
             await ctx.send(page)
 
-@commands.command()
+    @commands.command()
     @commands.guild_only()
     @has_app_role()
     async def addsuccess(self, ctx, user: discord.Member):
