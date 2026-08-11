@@ -134,9 +134,9 @@ class AuditLogger(commands.Cog):
     # ==========================================
     # ROBLOX AUDIT LOG MONITOR
     # ==========================================
-    @tasks.loop(minutes=1.0)
+    @tasks.loop(seconds=30.0)
     async def log_loop(self):
-        """Background task running every minute to fetch new Roblox logs."""
+        """Background task running every 30 seconds to fetch new Roblox logs."""
         await self.bot.wait_until_ready()
         
         for guild in self.bot.guilds:
@@ -292,3 +292,28 @@ class AuditLogger(commands.Cog):
             return await ctx.send("⚠️ Rank must be between 1 and 255.")
         await self.config.guild(ctx.guild).max_safe_rank.set(rank)
         await ctx.send(f"✅ Max safe rank threshold set to `{rank}`.")
+
+    @rblxaudit.command(name="test")
+    async def rblxaudit_test(self, ctx):
+        """Test the connection to the Open Cloud API."""
+        config = self.config.guild(ctx.guild)
+        api_key = await config.api_key()
+        group_id = await config.group_id()
+        
+        if not api_key or not group_id:
+            return await ctx.send("⚠️ Please set both the group ID and API key first (`[p]rblxaudit setup` and `[p]rblxaudit setkey`).")
+            
+        url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log?limit=10"
+        headers = {"x-api-key": api_key}
+        
+        async with self.session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                logs = data.get("data", [])
+                await ctx.send(f"✅ Connection successful! Retrieved {len(logs)} recent logs.")
+            elif resp.status == 401:
+                await ctx.send("❌ Connection failed: **Unauthorized**. Please check your API key.")
+            elif resp.status == 403:
+                await ctx.send("❌ Connection failed: **Forbidden**. Ensure your API key has the correct permissions (Group Audit Log access) for this group.")
+            else:
+                await ctx.send(f"❌ Connection failed with HTTP Code `{resp.status}`.")
