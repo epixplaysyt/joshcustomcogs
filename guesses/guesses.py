@@ -27,19 +27,21 @@ class ManagerApprovalView(discord.ui.View):
         self.auto_mark = auto_mark
         self.reg_cd = reg_cd
         self.win_cd = win_cd
+        self.messages = []
 
-    async def disable_all_buttons(self, interaction: discord.Interaction):
+    async def disable_all(self):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
+        for msg in self.messages:
+            try:
+                await msg.edit(view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Allow", style=discord.ButtonStyle.success)
     async def allow(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_all_buttons(interaction)
+        await self.disable_all()
         await interaction.response.send_message("You have approved the guessing session.")
         await self.cog._open_guessing_channel(self.interaction.guild, self.channel, self.answer, self.auto_mark, self.reg_cd, self.win_cd)
         self.cog.pending_requests.discard(self.interaction.guild.id)
@@ -47,7 +49,7 @@ class ManagerApprovalView(discord.ui.View):
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_all_buttons(interaction)
+        await self.disable_all()
         await interaction.response.send_message("You have denied the guessing session.")
         try:
             await self.interaction.user.send("Your request to open the guessing channel was **denied** by a manager.")
@@ -165,8 +167,12 @@ class Guesses(commands.Cog):
         probation_role_id = config_data["role_probation"]
         manager_role_id = config_data["role_manager"]
 
-        if host_role_id not in user_role_ids:
-            return await interaction.response.send_message("You do not have the required Host role to do this.", ephemeral=True)
+        is_host = host_role_id and host_role_id in user_role_ids
+        is_manager = manager_role_id and manager_role_id in user_role_ids
+        is_admin = interaction.user.guild_permissions.administrator
+
+        if not (is_host or is_manager or is_admin):
+            return await interaction.response.send_message("You do not have permission to host a guessing session.", ephemeral=True)
 
         if probation_role_id in user_role_ids:
             if guild.id in self.pending_requests:
@@ -181,25 +187,24 @@ class Guesses(commands.Cog):
             self.pending_requests.add(guild.id)
             view = ManagerApprovalView(self, interaction, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
             
-            success_count = 0
             for manager in managers:
                 try:
-                    await manager.send(
+                    msg = await manager.send(
                         f"**Approval Required:** {interaction.user.mention} (on probation) wants to open the guesses channel.\n"
                         f"**Answer:** {answer}\n"
                         f"**Auto-Marking:** {'Enabled' if auto_mark else 'Disabled'}\n"
                         f"**Cooldowns:** Regular: {regular_cooldown}m | Winners: {winner_cooldown}m",
                         view=view
                     )
-                    success_count += 1
+                    view.messages.append(msg)
                 except discord.Forbidden:
                     continue
 
-            if success_count == 0:
+            if not view.messages:
                 self.pending_requests.discard(guild.id)
                 return await interaction.response.send_message("Could not DM any managers. Please ask them to enable DMs.", ephemeral=True)
 
-            return await interaction.response.send_message(f"You are on probation. An approval request has been sent to {success_count} manager(s).", ephemeral=True)
+            return await interaction.response.send_message(f"You are on probation. An approval request has been sent to {len(view.messages)} manager(s).", ephemeral=True)
 
         await self._open_guessing_channel(guild, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
         await interaction.response.send_message("Guessing channel unlocked!", ephemeral=True)
@@ -210,8 +215,13 @@ class Guesses(commands.Cog):
         guild = interaction.guild
         config_data = await self.config.guild(guild).all()
         
-        if config_data["role_host"] not in [r.id for r in interaction.user.roles]:
-            return await interaction.response.send_message("You do not have the required Host role to do this.", ephemeral=True)
+        user_role_ids = [r.id for r in interaction.user.roles]
+        is_host = config_data["role_host"] and config_data["role_host"] in user_role_ids
+        is_manager = config_data["role_manager"] and config_data["role_manager"] in user_role_ids
+        is_admin = interaction.user.guild_permissions.administrator
+
+        if not (is_host or is_manager or is_admin):
+            return await interaction.response.send_message("You do not have permission to close the guessing channel.", ephemeral=True)
 
         channel_id = config_data["guess_channel_id"]
         channel = guild.get_channel(channel_id) if channel_id else None
