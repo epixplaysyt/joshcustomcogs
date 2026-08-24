@@ -372,7 +372,7 @@ class AdvancedMod(commands.Cog):
         duration_str = f" for {duration_minutes} minutes" if duration_minutes else ""
         await ctx.send(f"✅ Automated Escalation Configured: Reaching `{warn_count}` warnings will trigger a `{action}`{duration_str}.")
 
-    @commands.hybrid_command(name="warn", description="[Class I+] Issue a warning record to a user or ID.")
+    @commands.hybrid_command(name="warn", description="[Class I+] Issue a warning to a user or ID.")
     @commands.guild_only()
     async def warn(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
@@ -439,7 +439,7 @@ class AdvancedMod(commands.Cog):
                 await ctx.send(f"✅ Successfully removed Warning `#{warning_number}` from {target.mention}.")
                 await self.log_immediate_action(ctx.guild, f"Remove Warn #{warning_number}", target, ctx.author, f"Warning removed. Original Reason: {removed['reason']}", "None Provided")
 
-    @commands.hybrid_command(name="timeout", description="[Class I+] Restrict communication privileges via server isolation.")
+    @commands.hybrid_command(name="timeout", description="[Class I+] Timeout (mute) a user temporarily to stop them from interacting with the community.")
     @commands.guild_only()
     async def timeout(self, ctx, target: typing.Union[discord.Member, discord.User], minutes: int, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
