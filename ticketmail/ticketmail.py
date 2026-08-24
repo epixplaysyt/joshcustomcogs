@@ -208,7 +208,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
@@ -224,7 +224,7 @@ class Modmail(commands.Cog):
             busy_mode=False,
             auto_responders={},
             snippets={},
-            scheduled_closes={} # NEW: Stores {channel_id_str: {"time": float, "reason": str, "anon": bool, "closer_id": int}}
+            scheduled_closes={}
         )
         
         self.config.register_user(
@@ -967,7 +967,6 @@ class Modmail(commands.Cog):
                 if not waiting:
                     await self.config.channel(channel).waiting_since.set(now.timestamp())
 
-                # --- NEW CANCEL SCHEDULED CLOSE LOGIC ---
                 async with self.config.guild(guild).scheduled_closes() as sc:
                     if str(channel.id) in sc:
                         del sc[str(channel.id)]
@@ -976,7 +975,6 @@ class Modmail(commands.Cog):
                             color=discord.Color.red()
                         )
                         await channel.send(embed=cancel_embed)
-                # ----------------------------------------
 
                 ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
                 member = guild.get_member(message.author.id)
@@ -1371,7 +1369,6 @@ class Modmail(commands.Cog):
         if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        # --- NEW DELAY LOGIC ---
         if delay_hours and delay_hours > 0:
             close_time = datetime.datetime.now(datetime.timezone.utc).timestamp() + (delay_hours * 3600)
             
@@ -1399,7 +1396,6 @@ class Modmail(commands.Cog):
                         
             await interaction.response.send_message(f"✅ Ticket scheduled to close in **{delay_hours} hours** if no user response.", ephemeral=False)
             return
-        # -----------------------
 
         await interaction.response.send_message(
             embed=discord.Embed(description="🔒 Closing ticket and archiving transcript...", color=discord.Color.red()), 
