@@ -3,9 +3,7 @@ from redbot.core import commands, Config
 from discord import app_commands
 import datetime
 
-# --- Helper Function for Fuzzy Matching ---
 def get_edit_distance(s1: str, s2: str) -> int:
-    """Calculates the Levenshtein distance between two strings."""
     if len(s1) > len(s2):
         s1, s2 = s2, s1
     distances = range(len(s1) + 1)
@@ -21,7 +19,7 @@ def get_edit_distance(s1: str, s2: str) -> int:
 
 class ManagerApprovalView(discord.ui.View):
     def __init__(self, cog, interaction: discord.Interaction, channel: discord.TextChannel, answer: str, auto_mark: bool, reg_cd: int, win_cd: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=600)
         self.cog = cog
         self.interaction = interaction
         self.channel = channel
@@ -30,28 +28,38 @@ class ManagerApprovalView(discord.ui.View):
         self.reg_cd = reg_cd
         self.win_cd = win_cd
 
+    async def disable_all_buttons(self, interaction: discord.Interaction):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
     @discord.ui.button(label="Allow", style=discord.ButtonStyle.success)
     async def allow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.disable_all_buttons(interaction)
         await interaction.response.send_message("You have approved the guessing session.")
         await self.cog._open_guessing_channel(self.interaction.guild, self.channel, self.answer, self.auto_mark, self.reg_cd, self.win_cd)
+        self.cog.pending_requests.discard(self.interaction.guild.id)
         self.stop()
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.disable_all_buttons(interaction)
         await interaction.response.send_message("You have denied the guessing session.")
         try:
             await self.interaction.user.send("Your request to open the guessing channel was **denied** by a manager.")
         except discord.Forbidden:
             pass
+        self.cog.pending_requests.discard(self.interaction.guild.id)
         self.stop()
 
 class Guesses(commands.Cog):
-    """Cog for managing a customisable #guesses channel game with auto-marking."""
-
     def __init__(self, bot):
         self.bot = bot
         
-        # RedBot Config Setup
         self.config = Config.get_conf(self, identifier=9283746150, force_registration=True)
         default_guild = {
             "guess_channel_id": None,
@@ -67,33 +75,28 @@ class Guesses(commands.Cog):
         }
         self.config.register_guild(**default_guild)
 
-        # In-memory Session State
         self.is_active = False
-        self.user_guesses = {} # Tracks guesses per user: {user_id: set(guesses)}
-        self.last_guess_time = {} # Tracks cooldowns: {user_id: datetime}
+        self.user_guesses = {}
+        self.last_guess_time = {}
+        self.pending_requests = set()
         
-        # Current Session Properties
         self.session_answer = ""
         self.session_auto_mark = False
         self.session_regular_cd = 120 
         self.session_winner_cd = 30
 
     async def _open_guessing_channel(self, guild, channel, answer: str, auto_mark: bool, reg_cd: int, win_cd: int):
-        """Helper method to handle the actual unlocking logic and set session properties."""
         self.is_active = True
         self.user_guesses.clear()
         self.last_guess_time.clear()
         
-        # Apply the chosen properties for this session
         self.session_answer = answer
         self.session_auto_mark = auto_mark
         self.session_regular_cd = reg_cd
         self.session_winner_cd = win_cd
 
-        # Unlock the channel for the default role
         await channel.set_permissions(guild.default_role, send_messages=True)
         
-        # Get custom open message
         msg_text = await self.config.guild(guild).msg_open()
         
         embed = discord.Embed(
@@ -106,13 +109,10 @@ class Guesses(commands.Cog):
         await channel.send(embed=embed)
 
     async def _close_guessing_channel(self, guild, channel, answer: str, winner: discord.Member = None):
-        """Helper method to lock the channel and announce the answer."""
         self.is_active = False
 
-        # Lock the channel
         await channel.set_permissions(guild.default_role, send_messages=False)
 
-        # Get custom close message
         config_data = await self.config.guild(guild).all()
         msg_template = config_data["msg_close"]
         
@@ -124,10 +124,6 @@ class Guesses(commands.Cog):
             color=discord.Color.red()
         )
         await channel.send(embed=embed)
-
-    # ========================
-    # SLASH COMMANDS (ACTIONS)
-    # ========================
 
     @app_commands.command(name="guessopen", description="Unlocks the configured guesses channel and links to the question channel.")
     @app_commands.describe(
@@ -164,7 +160,6 @@ class Guesses(commands.Cog):
         if not channel:
             return await interaction.response.send_message("The configured guess channel no longer exists.", ephemeral=True)
 
-        # Role Verification
         user_role_ids = [r.id for r in interaction.user.roles]
         host_role_id = config_data["role_host"]
         probation_role_id = config_data["role_probation"]
@@ -173,30 +168,39 @@ class Guesses(commands.Cog):
         if host_role_id not in user_role_ids:
             return await interaction.response.send_message("You do not have the required Host role to do this.", ephemeral=True)
 
-        # Probation Check
         if probation_role_id in user_role_ids:
+            if guild.id in self.pending_requests:
+                return await interaction.response.send_message("A request is already pending approval from a manager.", ephemeral=True)
+
             manager_role = guild.get_role(manager_role_id)
-            managers = [m for m in guild.members if manager_role in m.roles] if manager_role else []
+            managers = manager_role.members if manager_role else []
             
             if not managers:
                 return await interaction.response.send_message("You are on probation, but no Managers could be found to approve this.", ephemeral=True)
             
-            manager = managers[0]
+            self.pending_requests.add(guild.id)
             view = ManagerApprovalView(self, interaction, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
-            try:
-                await manager.send(
-                    f"**Approval Required:** {interaction.user.mention} (on probation) wants to open the guesses channel.\n"
-                    f"**Answer:** {answer}\n"
-                    f"**Auto-Marking:** {'Enabled' if auto_mark else 'Disabled'}\n"
-                    f"**Cooldowns:** Regular: {regular_cooldown}m | Winners: {winner_cooldown}m",
-                    view=view
-                )
-                await interaction.response.send_message("You are on probation. An approval request has been sent to a manager.", ephemeral=True)
-            except discord.Forbidden:
-                await interaction.response.send_message("Could not DM the manager. Please ask them to enable DMs.", ephemeral=True)
-            return
+            
+            success_count = 0
+            for manager in managers:
+                try:
+                    await manager.send(
+                        f"**Approval Required:** {interaction.user.mention} (on probation) wants to open the guesses channel.\n"
+                        f"**Answer:** {answer}\n"
+                        f"**Auto-Marking:** {'Enabled' if auto_mark else 'Disabled'}\n"
+                        f"**Cooldowns:** Regular: {regular_cooldown}m | Winners: {winner_cooldown}m",
+                        view=view
+                    )
+                    success_count += 1
+                except discord.Forbidden:
+                    continue
 
-        # Normal Execution
+            if success_count == 0:
+                self.pending_requests.discard(guild.id)
+                return await interaction.response.send_message("Could not DM any managers. Please ask them to enable DMs.", ephemeral=True)
+
+            return await interaction.response.send_message(f"You are on probation. An approval request has been sent to {success_count} manager(s).", ephemeral=True)
+
         await self._open_guessing_channel(guild, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
         await interaction.response.send_message("Guessing channel unlocked!", ephemeral=True)
 
@@ -206,7 +210,6 @@ class Guesses(commands.Cog):
         guild = interaction.guild
         config_data = await self.config.guild(guild).all()
         
-        # Verify Host
         if config_data["role_host"] not in [r.id for r in interaction.user.roles]:
             return await interaction.response.send_message("You do not have the required Host role to do this.", ephemeral=True)
 
@@ -219,31 +222,23 @@ class Guesses(commands.Cog):
         if not self.is_active:
             return await interaction.response.send_message("The guessing channel is already closed.", ephemeral=True)
 
-        # Fallback to the session answer if not provided
         final_answer = answer if answer else self.session_answer
 
         await self._close_guessing_channel(guild, channel, final_answer)
         await interaction.response.send_message("Guessing channel locked successfully.", ephemeral=True)
 
-
-    # ========================
-    # PREFIX COMMANDS (CONFIG)
-    # ========================
     @commands.group(name="guessset")
     @commands.admin_or_permissions(manage_guild=True)
     async def guessset(self, ctx):
-        """Configuration commands for the Guesses cog."""
         pass
 
     @guessset.command(name="channel")
     async def guessset_channel(self, ctx, channel: discord.TextChannel):
-        """Set the channel where guessing will take place."""
         await self.config.guild(ctx.guild).guess_channel_id.set(channel.id)
         await ctx.send(f"Guesses channel set to {channel.mention}.")
 
     @guessset.group(name="role")
     async def guessset_role(self, ctx):
-        """Configure the roles used by the guessing game."""
         pass
 
     @guessset_role.command(name="host")
@@ -268,7 +263,6 @@ class Guesses(commands.Cog):
 
     @guessset_role.command(name="booster")
     async def guessset_role_booster(self, ctx, role: discord.Role = None):
-        """Sets a custom booster role. (Leave blank to use Discord's native Server Booster status)"""
         val = role.id if role else None
         await self.config.guild(ctx.guild).role_booster.set(val)
         status = f"**{role.name}**" if role else "Discord Native Boosting Status"
@@ -276,7 +270,6 @@ class Guesses(commands.Cog):
 
     @guessset.group(name="msg")
     async def guessset_msg(self, ctx):
-        """Configure custom messages. Use {user}, {answer}, {time}, or {winner} where applicable."""
         pass
 
     @guessset_msg.command(name="open")
@@ -299,10 +292,6 @@ class Guesses(commands.Cog):
         await self.config.guild(ctx.guild).msg_cooldown.set(text)
         await ctx.send("Cooldown message updated.")
 
-    # ========================
-    # EVENT LISTENER (LOGIC)
-    # ========================
-
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.guild is None or not self.is_active:
@@ -310,11 +299,9 @@ class Guesses(commands.Cog):
 
         config_data = await self.config.guild(message.guild).all()
         
-        # Only parse messages in the active guess channel
         if message.channel.id != config_data["guess_channel_id"]:
             return
 
-        # Do not moderate valid prefix commands inside the guess channel
         ctx = await self.bot.get_context(message)
         if ctx.valid:
             return
@@ -323,18 +310,15 @@ class Guesses(commands.Cog):
         now = datetime.datetime.now(datetime.timezone.utc)
         guess_text = message.content.lower().strip()
 
-        # Initialize user's guess set if missing
         if author.id not in self.user_guesses:
             self.user_guesses[author.id] = set()
 
-        # 1. Check for Duplicate Guesses per user
         if guess_text in self.user_guesses[author.id]:
             await message.delete()
             msg_text = config_data["msg_duplicate"].replace("{user}", author.mention)
             await message.channel.send(msg_text, delete_after=10)
             return
 
-        # 2. Evaluate roles for Cooldowns
         user_role_ids = [r.id for r in author.roles]
         
         is_native_booster = author.premium_since is not None
@@ -344,39 +328,37 @@ class Guesses(commands.Cog):
 
         is_prev_winner = config_data["role_winner"] in user_role_ids
 
-        # If they aren't a booster, check if they have a cooldown applied
-        if not is_booster:
-            cd_minutes = self.session_winner_cd if is_prev_winner else self.session_regular_cd
-            
-            if cd_minutes > 0:
-                cooldown_time = datetime.timedelta(minutes=cd_minutes)
-                last_guess = self.last_guess_time.get(author.id)
+        cd_minutes = self.session_winner_cd if (is_booster or is_prev_winner) else self.session_regular_cd
+        
+        if cd_minutes > 0:
+            cooldown_time = datetime.timedelta(minutes=cd_minutes)
+            last_guess = self.last_guess_time.get(author.id)
 
-                if last_guess and (now - last_guess) < cooldown_time:
-                    remaining = cooldown_time - (now - last_guess)
-                    minutes, seconds = divmod(int(remaining.total_seconds()), 60)
-                    hours, minutes = divmod(minutes, 60)
-                    time_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
-                    
-                    await message.delete()
-                    msg_text = config_data["msg_cooldown"].replace("{user}", author.mention).replace("{time}", time_str)
-                    await message.channel.send(msg_text, delete_after=10)
-                    return
+            if last_guess and (now - last_guess) < cooldown_time:
+                remaining = cooldown_time - (now - last_guess)
+                minutes, seconds = divmod(int(remaining.total_seconds()), 60)
+                hours, minutes = divmod(minutes, 60)
+                time_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
+                
+                await message.delete()
+                msg_text = config_data["msg_cooldown"].replace("{user}", author.mention).replace("{time}", time_str)
+                await message.channel.send(msg_text, delete_after=10)
+                return
 
-        # 3. Valid Guess Processing
         self.user_guesses[author.id].add(guess_text)
         self.last_guess_time[author.id] = now
         
-        # 4. Auto-Marking Logic
         if self.session_auto_mark:
-            # Check Levenshtein distance against the session answer
             target_answer = self.session_answer.lower().strip()
-            distance = get_edit_distance(guess_text, target_answer)
             
-            if distance <= 1:
-                # Correct! (Allows exactly 1 spelling mistake/addition/removal)
+            if target_answer.isdigit():
+                is_correct = (guess_text == target_answer)
+            else:
+                distance = get_edit_distance(guess_text, target_answer)
+                is_correct = (distance <= 1)
+            
+            if is_correct:
                 await message.add_reaction("✅")
                 await self._close_guessing_channel(message.guild, message.channel, self.session_answer, winner=author)
             else:
-                # Incorrect
                 await message.add_reaction("❌")
