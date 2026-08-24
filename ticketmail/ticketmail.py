@@ -161,7 +161,6 @@ class TicketConfirmationView(discord.ui.View):
             try:
                 channel = await self.cog._create_ticket(self.guild, self.user, dept_name, self.initial_message.content)
             except Exception as e:
-                print(f"[Modmail Error] Failed to create channel via button: {e}")
                 await interaction.message.edit(content="❌ Failed to create ticket. Please ensure the bot has 'Manage Channels' permissions.", view=None)
                 return
 
@@ -179,7 +178,7 @@ class TicketConfirmationView(discord.ui.View):
                     timestamp=now
                 )
                 embed.set_author(name=self.user.name, icon_url=self.user.display_avatar.url)
-                embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                embed.set_footer(text=f"User ID: {self.user.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
                 await channel.send(embed=embed, files=files)
 
@@ -387,13 +386,30 @@ class Modmail(commands.Cog):
                     username = user.name if user else "User"
                     emoji_str = str(payload.emoji)
                     
+                    try:
+                        dm_channel = self.bot.get_channel(payload.channel_id) or await user.create_dm()
+                        reacted_msg = await dm_channel.fetch_message(payload.message_id)
+                        msg_content = reacted_msg.content or (reacted_msg.embeds[0].description if reacted_msg.embeds else "*[Media]*")
+                        if len(msg_content) > 100: msg_content = msg_content[:97] + "..."
+                    except Exception:
+                        reacted_msg = None
+                        msg_content = "Unknown message"
+                    
                     embed = discord.Embed(
                         description=f"Reacted with {emoji_str}",
                         color=discord.Color.blue(),
                         timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
                     embed.set_author(name=f"{username}", icon_url=user.display_avatar.url if user else None)
+                    embed.add_field(name="To Message", value=f"> {msg_content}", inline=False)
+                    
                     await ticket_channel.send(embed=embed)
+                    
+                    if reacted_msg:
+                        try:
+                            await reacted_msg.reply(f"✅ Reaction `{emoji_str}` forwarded to staff.", delete_after=5)
+                        except Exception:
+                            pass
 
         else:
             owner_ids = await self.config.channel_from_id(payload.channel_id).owner_ids()
@@ -412,6 +428,15 @@ class Modmail(commands.Cog):
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                 ticket_id = await self.config.channel_from_id(payload.channel_id).ticket_id() or "UNKNOWN"
 
+                channel = self.bot.get_channel(payload.channel_id)
+                try:
+                    reacted_msg = await channel.fetch_message(payload.message_id)
+                    msg_content = reacted_msg.content or (reacted_msg.embeds[0].description if reacted_msg.embeds else "*[Media]*")
+                    if len(msg_content) > 100: msg_content = msg_content[:97] + "..."
+                except Exception:
+                    reacted_msg = None
+                    msg_content = "Unknown message"
+
                 embed = discord.Embed(
                     description=f"Reacted with {emoji_str}",
                     color=discord.Color.green(),
@@ -419,6 +444,7 @@ class Modmail(commands.Cog):
                 )
                 embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None)
                 embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                embed.add_field(name="To Message", value=f"> {msg_content}", inline=False)
                 
                 for uid in target_ids:
                     user = self.bot.get_user(uid)
@@ -427,6 +453,16 @@ class Modmail(commands.Cog):
                             await user.send(embed=embed)
                         except discord.Forbidden:
                             pass
+
+                if reacted_msg:
+                    try:
+                        log_embed = discord.Embed(
+                            description=f"✅ Reaction `{emoji_str}` forwarded to user(s).",
+                            color=discord.Color.light_grey()
+                        )
+                        await reacted_msg.reply(embed=log_embed)
+                    except Exception:
+                        pass
 
     async def _create_group_ticket(self, guild: discord.Guild, users: list, department: str = "general"):
         departments = await self.config.guild(guild).departments()
@@ -473,7 +509,7 @@ class Modmail(commands.Cog):
             color=discord.Color.green(),
             timestamp=now
         )
-        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nType here to reply to all users simultaneously. Users will not know who else is in the ticket."
+        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse Discord's **Reply** feature on a user's message to respond **only** to them. Sending a normal message will broadcast to everyone."
         await channel.send(content=role_mention, embed=embed)
         
         for user in users:
@@ -645,7 +681,7 @@ class Modmail(commands.Cog):
                     await channel.send(embed=chan_ar_embed)
                     
         except discord.Forbidden:
-            await channel.send("⚠️ **Warning:** The user has DMs disabled.")
+            pass
 
         return channel
 
@@ -655,30 +691,36 @@ class Modmail(commands.Cog):
         <html lang="en">
         <head>
             <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Transcript: {ticket_id}</title>
             <style>
-                body {{ background-color: #313338; color: #dbdee1; font-family: 'gg sans', sans-serif; padding: 20px; }}
-                .header {{ background-color: #2b2d31; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
-                .header h1 {{ margin: 0 0 10px 0; color: #fff; font-size: 24px; }}
-                .header p {{ margin: 5px 0; font-size: 14px; color: #b5bac1; }}
-                .message {{ display: flex; margin-bottom: 16px; margin-top: 16px; }}
-                .avatar {{ width: 40px; height: 40px; border-radius: 50%; margin-right: 16px; flex-shrink: 0; object-fit: cover; }}
-                .msg-body {{ display: flex; flex-direction: column; max-width: 80%; }}
-                .msg-header {{ display: flex; align-items: baseline; margin-bottom: 4px; }}
-                .username {{ color: #f2f3f5; font-weight: 500; font-size: 16px; margin-right: 6px; }}
-                .timestamp {{ color: #949ba4; font-size: 12px; }}
-                .content {{ font-size: 15px; line-height: 1.375; white-space: pre-wrap; word-wrap: break-word; }}
-                .attachment {{ max-width: 400px; max-height: 400px; margin-top: 8px; border-radius: 8px; }}
+                :root {{ --bg-main: #313338; --bg-alt: #2b2d31; --text-main: #dbdee1; --text-muted: #949ba4; --accent: #5865F2; }}
+                body {{ background-color: var(--bg-main); color: var(--text-main); font-family: 'gg sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 2rem; margin: 0; line-height: 1.5; }}
+                .header {{ background-color: var(--bg-alt); padding: 24px; border-radius: 12px; margin-bottom: 32px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-left: 4px solid var(--accent); }}
+                .header h1 {{ margin: 0 0 16px 0; color: #fff; font-size: 28px; font-weight: 700; }}
+                .header p {{ margin: 8px 0; font-size: 15px; color: var(--text-muted); }}
+                .header strong {{ color: var(--text-main); }}
+                .message {{ display: flex; margin-bottom: 24px; }}
+                .avatar {{ width: 48px; height: 48px; border-radius: 50%; margin-right: 16px; flex-shrink: 0; object-fit: cover; background-color: var(--bg-alt); }}
+                .msg-body {{ display: flex; flex-direction: column; max-width: 85%; }}
+                .msg-header {{ display: flex; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }}
+                .username {{ color: #fff; font-weight: 600; font-size: 16px; }}
+                .timestamp {{ color: var(--text-muted); font-size: 12px; }}
+                .badge {{ padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
+                .badge-anon {{ background-color: #4f545c; color: #fff; }}
+                .badge-note {{ background-color: #e6a822; color: #fff; }}
+                .content {{ font-size: 15px; color: var(--text-main); white-space: pre-wrap; word-break: break-word; background: var(--bg-alt); padding: 12px 16px; border-radius: 0 8px 8px 8px; }}
+                .attachment {{ max-width: 100%; max-height: 400px; margin-top: 12px; border-radius: 8px; cursor: pointer; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <h1>Transcript Ticket Record: {ticket_id}</h1>
-                <p><strong>Channel Name:</strong> {channel.name}</p>
+                <h1>Ticket Transcript: {ticket_id}</h1>
+                <p><strong>Channel:</strong> {channel.name}</p>
                 <p><strong>Users:</strong> {owners_text}</p>
                 <p><strong>Closed By:</strong> {closer.name} ({closer.id})</p>
                 <p><strong>Reason:</strong> {reason}</p>
-                <p><strong>Date Saved:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+                <p><strong>Date:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
             </div>
             <div class="messages">
         """
@@ -693,6 +735,7 @@ class Modmail(commands.Cog):
             timestamp = m.created_at.strftime('%Y-%m-%d %I:%M %p UTC')
             role_str = ""
             is_anon_msg = False
+            is_note_msg = False
 
             member_obj = guild.get_member(m.author.id)
             if member_obj:
@@ -702,6 +745,10 @@ class Modmail(commands.Cog):
 
             if m.author.bot and m.embeds:
                 embed_obj = m.embeds[0]
+                
+                if embed_obj.title == "📝 Internal Note":
+                    is_note_msg = True
+                    
                 if embed_obj.author and embed_obj.author.name:
                     if embed_obj.author.name.startswith("[Anonymous]"):
                         is_anon_msg = True
@@ -725,21 +772,31 @@ class Modmail(commands.Cog):
 
                 if embed_obj.description:
                     content = embed_obj.description
+                    
+                if embed_obj.fields:
+                    for field in embed_obj.fields:
+                        content += f"\n\n**{field.name}**\n{field.value}"
             
             attachments_html = ""
             for a in m.attachments:
                 if a.content_type and a.content_type.startswith('image/'):
                     attachments_html += f'<br><img class="attachment" src="{a.url}">'
                 else:
-                    attachments_html += f'<br><a href="{a.url}" style="color: #00a8fc;">[Attachment: {a.filename}]</a>'
+                    attachments_html += f'<br><a href="{a.url}" style="color: #5865F2; text-decoration: none;">📎 {a.filename}</a>'
 
             if not content and not attachments_html:
                 continue
 
-            if is_anon_msg:
+            if is_anon_msg or is_note_msg:
                 role_str = ""
 
             footer_meta = f" - {role_str}" if role_str else ""
+            
+            badge_html = ""
+            if is_anon_msg:
+                badge_html = '<span class="badge badge-anon">Anonymous</span>'
+            elif is_note_msg:
+                badge_html = '<span class="badge badge-note">Internal</span>'
 
             html += f"""
                 <div class="message">
@@ -747,6 +804,7 @@ class Modmail(commands.Cog):
                     <div class="msg-body">
                         <div class="msg-header">
                             <span class="username">{username}</span>
+                            {badge_html}
                             <span class="timestamp">{timestamp}{footer_meta}</span>
                         </div>
                         <div class="content">{content}{attachments_html}</div>
@@ -794,7 +852,7 @@ class Modmail(commands.Cog):
                 embed_desc = message.content if message.content else None
                 embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
                 embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
-                embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                embed.set_footer(text=f"User ID: {message.author.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
                 if reply_author and reply_text:
                     embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
@@ -857,7 +915,7 @@ class Modmail(commands.Cog):
                             embed_desc = message.content if message.content else None
                             embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
                             embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
-                            embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                            embed.set_footer(text=f"User ID: {message.author.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                             
                             if reply_author and reply_text:
                                 embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
@@ -872,8 +930,8 @@ class Modmail(commands.Cog):
                                     await ghost.delete()
                                 except Exception:
                                     pass
-                    except Exception as e:
-                        print(f"[Modmail Error] Automatic ticket execution dropped: {e}")
+                    except Exception:
+                        pass
                     return
 
                 embed = discord.Embed(
@@ -925,8 +983,8 @@ class Modmail(commands.Cog):
                     try:
                         bytes_data = await a.read()
                         attachments_data.append((bytes_data, a.filename))
-                    except Exception as e:
-                        print(f"[Modmail] Failed to cache attachment: {e}")
+                    except Exception:
+                        pass
 
                 try:
                     await message.delete()
@@ -975,7 +1033,23 @@ class Modmail(commands.Cog):
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
                 reply_author, reply_text = await self._get_reply_context(message)
 
-                for uid in target_ids:
+                specific_target_id = None
+                if message.reference and message.reference.resolved:
+                    ref_msg = message.reference.resolved
+                    if isinstance(ref_msg, discord.Message) and ref_msg.embeds and ref_msg.author.bot:
+                        footer_text = ref_msg.embeds[0].footer.text or ""
+                        if "User ID:" in footer_text:
+                            try:
+                                for part in footer_text.split("|"):
+                                    if "User ID:" in part.strip():
+                                        specific_target_id = int(part.replace("User ID:", "").strip())
+                                        break
+                            except Exception:
+                                pass
+
+                actual_targets = [specific_target_id] if specific_target_id and specific_target_id in target_ids else target_ids
+
+                for uid in actual_targets:
                     user = self.bot.get_user(uid)
                     if user:
                         try:
@@ -999,6 +1073,14 @@ class Modmail(commands.Cog):
 
                 chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
                 
+                if len(target_ids) > 1:
+                    if specific_target_id and specific_target_id in target_ids:
+                        t_user = self.bot.get_user(specific_target_id)
+                        t_name = t_user.name if t_user else str(specific_target_id)
+                        chan_embed.title = f"🔒 Sent ONLY to {t_name}"
+                    else:
+                        chan_embed.title = "📢 Broadcasted to ALL users"
+
                 if is_anon:
                     chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
                 else:
