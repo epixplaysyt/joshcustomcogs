@@ -149,7 +149,7 @@ class AuditLogger(commands.Cog):
                         else:
                             continue
 
-                url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log?limit=25"
+                url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log"
                 headers = {"x-api-key": api_key}
                 
                 async with self.session.get(url, headers=headers) as resp:
@@ -181,7 +181,7 @@ class AuditLogger(commands.Cog):
             except Exception as e:
                 if channel:
                     try:
-                        await channel.send(f"⚠️ **[RobloxAuditLogger] Error in loop:** `{str(e)}`")
+                        await channel.send(f"⚠️ **[RobloxAuditLogger] Loop Error:** `{str(e)}`")
                     except discord.Forbidden:
                         pass
 
@@ -244,7 +244,7 @@ class AuditLogger(commands.Cog):
         except Exception as e:
             if channel:
                 try:
-                    await channel.send(f"⚠️ **[RobloxAuditLogger] Error processing log:** `{str(e)}`")
+                    await channel.send(f"⚠️ **[RobloxAuditLogger] Log Error:** `{str(e)}`")
                 except discord.Forbidden:
                     pass
 
@@ -291,7 +291,7 @@ class AuditLogger(commands.Cog):
         if not api_key or not group_id:
             return await ctx.send("⚠️ Please set both the group ID and API key first (`[p]rblxaudit setup` and `[p]rblxaudit setkey`).")
             
-        url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log?limit=5"
+        url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log"
         headers = {"x-api-key": api_key}
         
         try:
@@ -300,21 +300,24 @@ class AuditLogger(commands.Cog):
                     data = await resp.json()
                     logs = data.get("data", [])
                     
-                    log_text = f"✅ **Connection successful! Last {len(logs)} collected logs:**\n```json\n"
-                    for log in logs:
+                    limited_logs = logs[:5]
+                    log_text = f"✅ **Connection successful! Last {len(limited_logs)} collected logs:**\n```json\n"
+                    for log in limited_logs:
                         log_text += str(log) + "\n\n"
                     log_text += "```"
                     
                     try:
                         await ctx.author.send(log_text[:2000])
-                        await ctx.send("✅ Test successful! I have DMed you the last 5 logs.")
+                        await ctx.send("✅ Test successful! I have DMs of the last 5 logs sent to you.")
                     except discord.Forbidden:
                         await ctx.send("❌ Connection successful, but I could not DM you. Please enable your DMs.")
                         
+                elif resp.status == 400:
+                    await ctx.send("❌ Connection failed: **Bad Request (400)**. Check that your Group ID is correct.")
                 elif resp.status == 401:
                     await ctx.send("❌ Connection failed: **Unauthorized**. Please check your API key.")
                 elif resp.status == 403:
-                    await ctx.send("❌ Connection failed: **Forbidden**. Ensure your API key has the correct permissions for this group.")
+                    await ctx.send("❌ Connection failed: **Forbidden**. Ensure your API key has audit log permissions for this group.")
                 else:
                     await ctx.send(f"❌ Connection failed with HTTP Code `{resp.status}`.")
         except Exception as e:
