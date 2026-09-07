@@ -198,8 +198,9 @@ class AuditLogger(commands.Cog):
             
             is_dangerous = False
             danger_reason = ""
+            action_lower = action_type.lower()
             
-            if action_type.lower() == "changerank":
+            if action_lower in ["changerank", "assign role", "unassign role"]:
                 role_set_id = desc.get("NewRoleSetId") or desc.get("RoleSetId") or desc.get("RoleNameId")
                 if role_set_id is not None:
                     try:
@@ -210,21 +211,25 @@ class AuditLogger(commands.Cog):
                 rank = self.group_roles.get(group_id, {}).get(role_set_id, 0)
                 
                 target_name = desc.get("TargetDisplayName") or desc.get("TargetName") or "Unknown User"
-                role_name = desc.get("NewRoleSetName") or desc.get("RoleName") or "Unknown Role"
+                role_name = desc.get("NewRoleSetName") or desc.get("RoleSetName") or desc.get("RoleName") or "Unknown Role"
                 
                 if rank >= max_safe_rank:
                     is_dangerous = True
-                    danger_reason = f"Ranked **{target_name}** to **{role_name}** (Rank {rank}), which meets or exceeds the safe threshold ({max_safe_rank})."
+                    danger_reason = f"{action_type}: **{target_name}** -> **{role_name}** (Rank {rank}, threshold: {max_safe_rank})."
+                else:
+                    is_dangerous = True
+                    danger_reason = f"{action_type}: **{target_name}** -> **{role_name}** (Rank {rank})."
                     
-            elif action_type.lower() == "spendgroupfunds":
+            elif action_lower in ["spendgroupfunds"]:
                 is_dangerous = True
                 amount = desc.get("Amount", "Unknown")
                 danger_reason = f"Spent **{amount}** Group Funds."
                 
-            elif action_type.lower() == "deletegroupasset":
+            elif action_lower in ["deletegroupasset", "update group asset"]:
                 is_dangerous = True
                 asset_name = desc.get("AssetName", "Unknown Asset")
-                danger_reason = f"Deleted group asset: **{asset_name}**."
+                asset_type = desc.get("AssetType", "Asset")
+                danger_reason = f"{action_type} ({asset_type}): **{asset_name}**."
 
             if is_dangerous:
                 embed = discord.Embed(
