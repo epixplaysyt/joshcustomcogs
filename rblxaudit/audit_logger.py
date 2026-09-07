@@ -190,8 +190,10 @@ class AuditLogger(commands.Cog):
             action_type = log.get("actionType", "")
             actor_data = log.get("actor", {})
             actor_user = actor_data.get("user", {})
-            actor_name = actor_user.get("displayName") or actor_user.get("username") or "Unknown"
+            actor_username = actor_user.get("username", "Unknown")
+            actor_display = actor_user.get("displayName", "Unknown")
             actor_id = actor_user.get("userId", 0)
+            actor_name_str = f"{actor_display} (@{actor_username})"
             
             desc = log.get("description", {})
             created_at = parse_isodate(log.get("created"))
@@ -210,15 +212,18 @@ class AuditLogger(commands.Cog):
                     
                 rank = self.group_roles.get(group_id, {}).get(role_set_id, 0)
                 
-                target_name = desc.get("TargetDisplayName") or desc.get("TargetName") or "Unknown User"
+                target_username = desc.get("TargetName", "Unknown")
+                target_display = desc.get("TargetDisplayName", "Unknown")
+                target_name_str = f"{target_display} (@{target_username})"
+                
                 role_name = desc.get("NewRoleSetName") or desc.get("RoleSetName") or desc.get("RoleName") or "Unknown Role"
                 
                 if rank >= max_safe_rank:
                     is_dangerous = True
-                    danger_reason = f"{action_type}: **{target_name}** -> **{role_name}** (Rank {rank}, threshold: {max_safe_rank})."
+                    danger_reason = f"{action_type}: **{target_name_str}** -> **{role_name}** (Rank {rank}, threshold: {max_safe_rank})."
                 else:
                     is_dangerous = True
-                    danger_reason = f"{action_type}: **{target_name}** -> **{role_name}** (Rank {rank})."
+                    danger_reason = f"{action_type}: **{target_name_str}** -> **{role_name}** (Rank {rank})."
                     
             elif action_lower in ["spendgroupfunds"]:
                 is_dangerous = True
@@ -237,9 +242,8 @@ class AuditLogger(commands.Cog):
                     color=discord.Color.orange(),
                     timestamp=created_at or datetime.utcnow()
                 )
-                embed.set_author(name=f"{actor_name} ({actor_id})", url=f"https://www.roblox.com/users/{actor_id}/profile")
+                embed.set_author(name=f"{actor_name_str} ({actor_id})", url=f"https://www.roblox.com/users/{actor_id}/profile")
                 embed.add_field(name="Action Type", value=f"`{action_type}`", inline=True)
-                embed.add_field(name="Group ID", value=str(group_id), inline=True)
                 embed.add_field(name="Details", value=danger_reason, inline=False)
                 
                 try:
