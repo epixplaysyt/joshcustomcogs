@@ -281,6 +281,9 @@ class AuditLogger(commands.Cog):
 
     @rblxaudit.command(name="test")
     async def rblxaudit_test(self, ctx):
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.send("❌ You must have Administrator permissions to run this test.")
+            
         config = self.config.guild(ctx.guild)
         api_key = await config.api_key()
         group_id = await config.group_id()
@@ -288,7 +291,7 @@ class AuditLogger(commands.Cog):
         if not api_key or not group_id:
             return await ctx.send("⚠️ Please set both the group ID and API key first (`[p]rblxaudit setup` and `[p]rblxaudit setkey`).")
             
-        url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log?limit=10"
+        url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log?limit=5"
         headers = {"x-api-key": api_key}
         
         try:
@@ -296,7 +299,18 @@ class AuditLogger(commands.Cog):
                 if resp.status == 200:
                     data = await resp.json()
                     logs = data.get("data", [])
-                    await ctx.send(f"✅ Connection successful! Retrieved {len(logs)} recent logs.")
+                    
+                    log_text = f"✅ **Connection successful! Last {len(logs)} collected logs:**\n```json\n"
+                    for log in logs:
+                        log_text += str(log) + "\n\n"
+                    log_text += "```"
+                    
+                    try:
+                        await ctx.author.send(log_text[:2000])
+                        await ctx.send("✅ Test successful! I have DMed you the last 5 logs.")
+                    except discord.Forbidden:
+                        await ctx.send("❌ Connection successful, but I could not DM you. Please enable your DMs.")
+                        
                 elif resp.status == 401:
                     await ctx.send("❌ Connection failed: **Unauthorized**. Please check your API key.")
                 elif resp.status == 403:
