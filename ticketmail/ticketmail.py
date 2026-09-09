@@ -208,13 +208,14 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
         self.config.register_guild(
             log_channel_id=None,
             ticket_category_id=None,
+            escalation_role_id=None,
             immune_roles=[],
             blocked_users=[],
             ticket_counter=1000,
@@ -380,7 +381,7 @@ class Modmail(commands.Cog):
                     channel_id = int(channel_id_str)
                     channel = guild.get_channel(channel_id)
                     if channel:
-                        await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"])
+                        await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"], data.get("private", False))
                     to_remove.append(channel_id_str)
                     
             if to_remove:
@@ -744,7 +745,10 @@ class Modmail(commands.Cog):
                 .badge-anon {{ background-color: #4f545c; color: #fff; }}
                 .badge-note {{ background-color: #e6a822; color: #fff; }}
                 .content {{ font-size: 15px; color: var(--text-main); white-space: pre-wrap; word-break: break-word; background: var(--bg-alt); padding: 12px 16px; border-radius: 0 8px 8px 8px; }}
-                .attachment {{ max-width: 100%; max-height: 400px; margin-top: 12px; border-radius: 8px; cursor: pointer; }}
+                .media-container {{ margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }}
+                .attachment-img {{ max-width: 100%; max-height: 400px; border-radius: 8px; object-fit: contain; border: 1px solid rgba(255,255,255,0.1); background-color: #1e1f22; display: block; }}
+                .attachment-file {{ display: inline-flex; align-items: center; gap: 6px; background: #2b2d31; padding: 8px 12px; border-radius: 6px; color: #5865f2; text-decoration: none; font-weight: 500; font-size: 14px; border: 1px solid rgba(255,255,255,0.05); width: fit-content; }}
+                .attachment-file:hover {{ text-decoration: underline; background: #35373c; }}
             </style>
         </head>
         <body>
@@ -781,10 +785,14 @@ class Modmail(commands.Cog):
                 if not m.author.bot:
                     username = member_obj.display_name
 
+            embed_images = []
             if m.author.bot:
                 if m.embeds:
                     embed_obj = m.embeds[0]
                     footer_text = embed_obj.footer.text if embed_obj.footer else ""
+
+                    if embed_obj.image and embed_obj.image.url:
+                        embed_images.append(embed_obj.image.url)
 
                     if embed_obj.title == "📝 Internal Note":
                         is_note_msg = True
@@ -825,7 +833,8 @@ class Modmail(commands.Cog):
                         
                     if embed_obj.fields:
                         for field in embed_obj.fields:
-                            content += f"\n\n**{field.name}**\n{field.value}"
+                            if not field.name.startswith("💬 Replying"):
+                                content += f"\n\n**{field.name}**\n{field.value}"
                 else:
                     is_bot_msg = True
                     username = self.bot.user.name
@@ -834,11 +843,20 @@ class Modmail(commands.Cog):
                     is_staff_msg = True
 
             attachments_html = ""
+            media_items = []
+
             for a in m.attachments:
-                if a.content_type and a.content_type.startswith('image/'):
-                    attachments_html += f'<br><img class="attachment" src="{a.url}">'
+                is_image = (a.content_type and a.content_type.startswith('image/')) or any(a.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+                if is_image:
+                    media_items.append(f'<a href="{a.url}" target="_blank"><img class="attachment-img" src="{a.url}" alt="{a.filename}" loading="lazy"></a>')
                 else:
-                    attachments_html += f'<br><a href="{a.url}" style="color: #5865F2; text-decoration: none;">📎 {a.filename}</a>'
+                    media_items.append(f'<a class="attachment-file" href="{a.url}" target="_blank">📎 {a.filename}</a>')
+
+            for img_url in embed_images:
+                media_items.append(f'<a href="{img_url}" target="_blank"><img class="attachment-img" src="{img_url}" alt="Embed Media" loading="lazy"></a>')
+
+            if media_items:
+                attachments_html = f'<div class="media-container">{"".join(media_items)}</div>'
 
             if not content and not attachments_html:
                 continue
@@ -876,7 +894,7 @@ class Modmail(commands.Cog):
         transcript_file = io.BytesIO(html.encode('utf-8'))
         return discord.File(transcript_file, filename=f"transcript_{ticket_id}.html")
 
-    async def _execute_close(self, channel: discord.TextChannel, reason: str, anonymous: bool, closer_id: int):
+    async def _execute_close(self, channel: discord.TextChannel, reason: str, anonymous: bool, closer_id: int, private: bool = False):
         owner_ids = await self.config.channel(channel).owner_ids()
         legacy_id = await self.config.channel(channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -908,29 +926,91 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
-        transcript_file = await self._generate_html_transcript(channel, owners_str, closer_display, reason, ticket_id)
-        log_channel_id = await self.config.guild(channel.guild).log_channel_id()
-        log_channel = channel.guild.get_channel(log_channel_id) if log_channel_id else None
+        # Calculate time metrics & extract first message
+        messages = [m async for m in channel.history(limit=None, oldest_first=True)]
         
-        if log_channel:
-            date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
-            embed = discord.Embed(title=f"🔒 Archived Ticket Record - {ticket_id}", color=discord.Color.red())
-            embed.add_field(name="Users", value=owners_str)
-            embed.add_field(name="Closed By", value="Support Team" if anonymous else (closer.mention if closer else "System"))
-            embed.add_field(name="Reason", value=reason, inline=False)
-            embed.set_footer(text=f"Archive Date: {date_str}")
-            await log_channel.send(embed=embed, file=transcript_file)
+        first_user_msg = None
+        for m in messages:
+            if not m.author.bot and m.clean_content:
+                first_user_msg = m.clean_content
+                break
+            elif m.embeds:
+                for emb in m.embeds:
+                    if emb.footer and "User ID:" in (emb.footer.text or "") and emb.description:
+                        first_user_msg = emb.description
+                        break
+                if first_user_msg:
+                    break
+                    
+        if not first_user_msg:
+            first_user_msg = "*No initial text message recorded.*"
+
+        created_at = channel.created_at
+        closed_at = datetime.datetime.now(datetime.timezone.utc)
+        duration_delta = closed_at - created_at
+        
+        days, remainder = divmod(int(duration_delta.total_seconds()), 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        duration_parts = []
+        if days > 0: duration_parts.append(f"{days}d")
+        if hours > 0: duration_parts.append(f"{hours}h")
+        if minutes > 0: duration_parts.append(f"{minutes}m")
+        if not duration_parts: duration_parts.append(f"{seconds}s")
+        duration_str = " ".join(duration_parts)
+
+        closed_ts = int(closed_at.timestamp())
+
+        transcript_file = await self._generate_html_transcript(channel, owners_str, closer_display, reason, ticket_id)
+
+        # Handle Private Transcript vs Public Log Channel
+        if private:
+            if closer:
+                try:
+                    priv_embed = discord.Embed(
+                        title=f"🔒 Private Transcript - {ticket_id}",
+                        description=f"**First User Message:**\n> {first_user_msg[:1000]}\n\nThis transcript was flagged as **private/confidential** and sent directly to you.",
+                        color=discord.Color.gold(),
+                        timestamp=closed_at
+                    )
+                    priv_embed.add_field(name="Users", value=owners_str, inline=True)
+                    priv_embed.add_field(name="Duration Open", value=f"`{duration_str}`", inline=True)
+                    priv_embed.add_field(name="Reason", value=reason, inline=False)
+                    priv_embed.set_footer(text=f"Closed Date: {closed_at.strftime('%Y-%m-%d %I:%M %p UTC')}")
+                    await closer.send(embed=priv_embed, file=transcript_file)
+                except discord.Forbidden:
+                    pass
+        else:
+            log_channel_id = await self.config.guild(channel.guild).log_channel_id()
+            log_channel = channel.guild.get_channel(log_channel_id) if log_channel_id else None
+            
+            if log_channel:
+                date_str = closed_at.strftime('%Y-%m-%d %I:%M %p UTC')
+                embed = discord.Embed(
+                    title=f"🔒 Archived Ticket Record - {ticket_id}", 
+                    color=discord.Color.red(),
+                    timestamp=closed_at
+                )
+                embed.description = f"**First Message:**\n> {first_user_msg[:1000]}"
+                embed.add_field(name="Users", value=owners_str, inline=True)
+                embed.add_field(name="Closed By", value="Support Team" if anonymous else (closer.mention if closer else "System"), inline=True)
+                embed.add_field(name="Duration Open", value=f"`{duration_str}`", inline=True)
+                embed.add_field(name="Closed", value=f"<t:{closed_ts}:R>", inline=True)
+                embed.add_field(name="Reason", value=reason, inline=False)
+                embed.set_footer(text=f"Archive Date: {date_str}")
+                await log_channel.send(embed=embed, file=transcript_file)
 
         for uid in target_ids:
             user = self.bot.get_user(uid)
             if user:
                 try:
-                    date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %I:%M %p UTC')
+                    date_str = closed_at.strftime('%Y-%m-%d %I:%M %p UTC')
                     user_embed = discord.Embed(
                         title=f"🔒 Ticket Closed - {ticket_id}",
                         description=f"Your ticket has been closed by {closer_user_dm_str}.",
                         color=discord.Color.red(),
-                        timestamp=datetime.datetime.now(datetime.timezone.utc)
+                        timestamp=closed_at
                     )
                     user_embed.add_field(name="Reason", value=reason, inline=False)
                     user_embed.set_footer(text=f"Date: {date_str}")
@@ -1289,6 +1369,44 @@ class Modmail(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
+    @ticket_group.command(name="escalate", description="Escalate this ticket to the higher-tier staff role.")
+    @app_commands.default_permissions(manage_messages=True)
+    async def ticket_escalate(self, interaction: discord.Interaction):
+        owner_ids = await self.config.channel(interaction.channel).owner_ids()
+        legacy_id = await self.config.channel(interaction.channel).owner_id()
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if not target_ids:
+            return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
+
+        esc_role_id = await self.config.guild(interaction.guild).escalation_role_id()
+        if not esc_role_id:
+            return await interaction.response.send_message("❌ No escalation role configured. Set one with `!modmailset escalationrole <role>`.", ephemeral=True)
+
+        esc_role = interaction.guild.get_role(esc_role_id)
+        if not esc_role:
+            return await interaction.response.send_message("❌ The configured escalation role no longer exists.", ephemeral=True)
+
+        dept_name = await self.config.channel(interaction.channel).department()
+        departments = await self.config.guild(interaction.guild).departments()
+        
+        if isinstance(departments, dict) and dept_name in departments:
+            dept_data = departments[dept_name]
+            old_role_id = dept_data.get("role_id")
+            if old_role_id:
+                old_role = interaction.guild.get_role(old_role_id)
+                if old_role:
+                    await interaction.channel.set_permissions(old_role, overwrite=None)
+
+        await interaction.channel.set_permissions(esc_role, read_messages=True, send_messages=True)
+
+        embed = discord.Embed(
+            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}.",
+            color=discord.Color.red(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        await interaction.response.send_message(embed=embed)
+
     @ticket_group.command(name="transfer", description="Move this ticket to another department.")
     @app_commands.describe(department="The name of the department to move this ticket to.")
     @app_commands.default_permissions(manage_messages=True)
@@ -1358,10 +1476,18 @@ class Modmail(commands.Cog):
     @app_commands.describe(
         reason="The reason for closing the ticket.",
         anonymous="Close ticket anonymously as Support Team?",
-        delay_hours="Number of hours to wait before closing (cancelled if user replies)."
+        delay_hours="Number of hours to wait before closing (cancelled if user replies).",
+        private="Keep transcript private (sent ONLY to you, omitting the public staff log)?"
     )
     @app_commands.default_permissions(manage_messages=True)
-    async def ticket_close(self, interaction: discord.Interaction, reason: str, anonymous: bool = False, delay_hours: float = 0.0):
+    async def ticket_close(
+        self, 
+        interaction: discord.Interaction, 
+        reason: str, 
+        anonymous: bool = False, 
+        delay_hours: float = 0.0,
+        private: bool = False
+    ):
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1377,7 +1503,8 @@ class Modmail(commands.Cog):
                     "time": close_time,
                     "reason": reason,
                     "anon": anonymous,
-                    "closer_id": interaction.user.id
+                    "closer_id": interaction.user.id,
+                    "private": private
                 }
 
             for uid in target_ids:
@@ -1394,19 +1521,29 @@ class Modmail(commands.Cog):
                     except discord.Forbidden:
                         pass
                         
-            await interaction.response.send_message(f"✅ Ticket scheduled to close in **{delay_hours} hours** if no user response.", ephemeral=False)
+            priv_note = " (Private Transcript)" if private else ""
+            await interaction.response.send_message(f"✅ Ticket scheduled to close in **{delay_hours} hours** if no user response.{priv_note}", ephemeral=False)
             return
 
         await interaction.response.send_message(
             embed=discord.Embed(description="🔒 Closing ticket and archiving transcript...", color=discord.Color.red()), 
             ephemeral=True
         )
-        await self._execute_close(interaction.channel, reason, anonymous, interaction.user.id)
+        await self._execute_close(interaction.channel, reason, anonymous, interaction.user.id, private)
 
     @commands.group(name="modmailset")
     @commands.admin_or_permissions(manage_guild=True)
     async def modmailset(self, ctx):
         pass
+
+    @modmailset.command(name="escalationrole")
+    async def modmailset_escalationrole(self, ctx, role: discord.Role = None):
+        if not role:
+            await self.config.guild(ctx.guild).escalation_role_id.set(None)
+            return await ctx.send("✅ Escalation role cleared.")
+            
+        await self.config.guild(ctx.guild).escalation_role_id.set(role.id)
+        await ctx.send(f"✅ Escalation role set to **{role.name}**. Using `/modmail escalate` will now reassign tickets to this role.")
 
     @modmailset.command(name="busy")
     async def modmailset_busy(self, ctx):
