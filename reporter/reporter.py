@@ -16,7 +16,13 @@ class ResolveView(discord.ui.View):
         
         try:
             user = await interaction.client.fetch_user(reporter_id)
-            await user.send("Your recent report has been dealt with. The result cannot be revealed for confidentiality reasons.")
+            dm_embed = discord.Embed(
+                title="✅ Report Resolved",
+                description="Your recent report has been dealt with.\n\nThe result cannot be revealed for confidentiality reasons. Thank you for helping keep the server safe.",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+            await user.send(embed=dm_embed)
         except discord.HTTPException:
             pass
 
@@ -28,6 +34,7 @@ class ResolveView(discord.ui.View):
         button.label = "Resolved"
         
         await interaction.response.edit_message(content=f"**Resolved by {interaction.user.mention}**", embed=embed, view=self)
+
 
 class ReportModal(discord.ui.Modal):
     def __init__(self, message: discord.Message, config: Config):
@@ -85,6 +92,7 @@ class ReportModal(discord.ui.Modal):
             await interaction.response.send_message("✅ Thank you. The message has been successfully reported.", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("❌ I don't have permission to send messages to the staff report channel.", ephemeral=True)
+
 
 class MessageReporter(commands.Cog):
     def __init__(self, bot: Red):
