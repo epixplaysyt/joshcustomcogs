@@ -208,7 +208,7 @@ class TicketConfirmationView(discord.ui.View):
 class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=8472938474, force_registration=True)
+        self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
         
         self.config.register_global(default_guild_id=None)
         
