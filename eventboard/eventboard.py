@@ -29,7 +29,6 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    # Changed to 5 minutes
     @tasks.loop(minutes=5)
     async def update_board_loop(self):
         try:
@@ -40,15 +39,12 @@ class EventBoard(commands.Cog):
                     if guild:
                         await self._run_board_update(guild)
                 except Exception as e:
-                    # Catch errors per guild so one failing guild doesn't break the others
                     log.error(f"EventBoard error updating guild {guild_id}: {e}")
         except Exception as e:
-            # Catch errors in the main loop so it doesn't crash completely
             log.error(f"EventBoard fatal loop error: {e}")
 
     @update_board_loop.error
     async def update_board_loop_error(self, error):
-        # Fallback error handler for the task loop
         log.error(f"Unhandled exception in EventBoard task loop: {error}")
 
     async def _run_board_update(self, guild: discord.Guild) -> tuple[bool, str]:
@@ -97,13 +93,12 @@ class EventBoard(commands.Cog):
                 category = session_type.get("category", "")
                 
                 if category and str(category).lower() in ["event", "events"]:
-                    # Filter out events older than 12 hours based on end time or scheduled date
                     ref_time_str = item.get("ended") or item.get("date")
                     if ref_time_str:
                         try:
                             ref_dt = datetime.fromisoformat(str(ref_time_str).replace("Z", "+00:00"))
                             if (now - ref_dt) > timedelta(hours=12):
-                                continue  # Skip events older than 12 hours
+                                continue  
                         except Exception:
                             pass
                             
@@ -118,7 +113,6 @@ class EventBoard(commands.Cog):
                 status_str = str(event.get("status", "")).lower()
                 is_cancelled = event.get("cancelled") is True or status_str == "cancelled"
                 
-                # Comprehensive evaluation for Completed vs Ongoing vs Upcoming states
                 is_completed = (event.get("ended") is not None or status_str == "ended") and not is_cancelled
                 is_ongoing = not is_completed and not is_cancelled and (
                     status_str in ["ongoing", "live", "active"] or event.get("startedAt") is not None
@@ -153,7 +147,6 @@ class EventBoard(commands.Cog):
                 raw_desc = session_type.get("description") or event.get("description") or ""
                 raw_desc = raw_desc.strip().replace("\n", " ")
                 
-                # Max 2 lines/ultra-short format constraint for completed or cancelled histories
                 if is_completed or is_cancelled:
                     if len(raw_desc) > 60:
                         desc_snippet = f"\n*\"{raw_desc[:57]}...\"*"
@@ -223,11 +216,7 @@ class EventBoard(commands.Cog):
                 return True, f"Board spawned fresh (Found {len(upcoming_events)} events)."
             except Exception as e:
                 return False, f"Discord Write Error: Failed to send embed: {str(e)}"
-
-    # ========================
-    # PREFIX ADMIN COMMANDS
-    # ========================
-
+                
     @commands.group(name="eventset")
     @commands.admin_or_permissions(manage_guild=True)
     async def eventset(self, ctx):
