@@ -29,13 +29,27 @@ class EventBoard(commands.Cog):
     def cog_unload(self):
         self.update_board_loop.cancel()
 
-    @tasks.loop(minutes=1)
+    # Changed to 5 minutes
+    @tasks.loop(minutes=5)
     async def update_board_loop(self):
-        await self.bot.wait_until_ready()
-        for guild_id in await self.config.all_guilds():
-            guild = self.bot.get_guild(guild_id)
-            if guild:
-                await self._run_board_update(guild)
+        try:
+            await self.bot.wait_until_ready()
+            for guild_id in await self.config.all_guilds():
+                try:
+                    guild = self.bot.get_guild(guild_id)
+                    if guild:
+                        await self._run_board_update(guild)
+                except Exception as e:
+                    # Catch errors per guild so one failing guild doesn't break the others
+                    log.error(f"EventBoard error updating guild {guild_id}: {e}")
+        except Exception as e:
+            # Catch errors in the main loop so it doesn't crash completely
+            log.error(f"EventBoard fatal loop error: {e}")
+
+    @update_board_loop.error
+    async def update_board_loop_error(self, error):
+        # Fallback error handler for the task loop
+        log.error(f"Unhandled exception in EventBoard task loop: {error}")
 
     async def _run_board_update(self, guild: discord.Guild) -> tuple[bool, str]:
         """Internal helper to process the API request. Returns (success_bool, status_message)"""
@@ -83,7 +97,7 @@ class EventBoard(commands.Cog):
                 category = session_type.get("category", "")
                 
                 if category and str(category).lower() in ["event", "events"]:
-                    # FIXED: Filter out events older than 12 hours based on end time or scheduled date
+                    # Filter out events older than 12 hours based on end time or scheduled date
                     ref_time_str = item.get("ended") or item.get("date")
                     if ref_time_str:
                         try:
@@ -104,7 +118,7 @@ class EventBoard(commands.Cog):
                 status_str = str(event.get("status", "")).lower()
                 is_cancelled = event.get("cancelled") is True or status_str == "cancelled"
                 
-                # FIXED: Comprehensive evaluation for Completed vs Ongoing vs Upcoming states
+                # Comprehensive evaluation for Completed vs Ongoing vs Upcoming states
                 is_completed = (event.get("ended") is not None or status_str == "ended") and not is_cancelled
                 is_ongoing = not is_completed and not is_cancelled and (
                     status_str in ["ongoing", "live", "active"] or event.get("startedAt") is not None
@@ -139,7 +153,7 @@ class EventBoard(commands.Cog):
                 raw_desc = session_type.get("description") or event.get("description") or ""
                 raw_desc = raw_desc.strip().replace("\n", " ")
                 
-                # FIXED: Max 2 lines/ultra-short format constraint for completed or cancelled histories
+                # Max 2 lines/ultra-short format constraint for completed or cancelled histories
                 if is_completed or is_cancelled:
                     if len(raw_desc) > 60:
                         desc_snippet = f"\n*\"{raw_desc[:57]}...\"*"
