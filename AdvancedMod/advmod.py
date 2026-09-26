@@ -303,7 +303,7 @@ class AdvancedMod(commands.Cog):
             reqs[req_id] = base_payload
 
     async def _process_warning_escalation(self, ctx: commands.Context, target: typing.Union[discord.Member, discord.User]):
-        warns = await self.config.user(target).warnings()
+        warns = await self.config.member_from_ids(ctx.guild.id, target.id).warnings()
         warn_count = len(warns)
         punishments = await self.config.guild(ctx.guild).punishments()
         
@@ -382,7 +382,7 @@ class AdvancedMod(commands.Cog):
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ You must provide visual proof attributes (a link or file upload).", ephemeral=True)
         
-        async with self.config.user(target).warnings() as warns:
+        async with self.config.member_from_ids(ctx.guild.id, target.id).warnings() as warns:
             warns.append({"reason": reason, "proof": proof_data, "mod": ctx.author.id, "time": time.time()})
             total_warns = len(warns)
 
@@ -399,7 +399,7 @@ class AdvancedMod(commands.Cog):
     async def warnings(self, ctx, target: typing.Union[discord.Member, discord.User]):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
         
-        warns = await self.config.user(target).warnings()
+        warns = await self.config.member_from_ids(ctx.guild.id, target.id).warnings()
         if not warns:
             return await ctx.send(f"✅ **{target.display_name}** has a perfectly clean record (0 warnings).")
             
@@ -423,7 +423,7 @@ class AdvancedMod(commands.Cog):
         allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
         if not allowed: return await ctx.send(error_msg, ephemeral=True)
         
-        async with self.config.user(target).warnings() as warns:
+        async with self.config.member_from_ids(ctx.guild.id, target.id).warnings() as warns:
             if not warns:
                 return await ctx.send(f"**{target.display_name}** does not have any active warnings to remove.", ephemeral=True)
                 
