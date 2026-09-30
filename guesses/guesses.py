@@ -361,8 +361,11 @@ class Guesses(commands.Cog):
         if self.session_auto_mark:
             target_answer = self.session_answer.lower().strip()
             
-            if target_answer.isdigit():
-                is_correct = (guess_text == target_answer)
+            guess_digits = "".join(c for c in guess_text if c.isdigit())
+            target_digits = "".join(c for c in target_answer if c.isdigit())
+            
+            if guess_digits != target_digits:
+                is_correct = False
             else:
                 distance = get_edit_distance(guess_text, target_answer)
                 is_correct = (distance <= 1)
