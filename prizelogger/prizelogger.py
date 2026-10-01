@@ -101,7 +101,7 @@ class PayoutTracker(commands.Cog):
                     msg_id = None
                     channel_id = None
                     try:
-                        msg = await user.send(content="🎉 Congratulations! You have a payout logged!", embed=embed)
+                        msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
                         msg_id = msg.id
                         channel_id = msg.channel.id
                     except discord.Forbidden:
@@ -126,7 +126,7 @@ class PayoutTracker(commands.Cog):
 
     def build_embed(self, display_status, roblox_username, prize, category, due_date=None):
         color_map = {
-            "Logged": discord.Color.orange(),
+            "Logged": discord.Color.purple(),
             "Scheduled": discord.Color.gold(),
             "Paid out": discord.Color.green()
         }
@@ -142,7 +142,7 @@ class PayoutTracker(commands.Cog):
             title="💸 Payout Status",
             color=color_map.get(display_status, discord.Color.blue())
         )
-        embed.add_field(name="📊 Current Status", value=f"`{status_emoji} {display_status}`", inline=False)
+        embed.add_field(name="📊 Current Status", value=f"{status_emoji} **{display_status}**", inline=False)
         
         if display_status == "Scheduled" and due_date:
             try:
@@ -152,7 +152,7 @@ class PayoutTracker(commands.Cog):
                 pass
                 
         embed.add_field(name="🎮 Roblox Username", value=f"`{roblox_username}`", inline=True)
-        embed.add_field(name="🎁 Payout", value=f"`{prize}`", inline=True)
+        embed.add_field(name="🎁 Prize", value=f"`{prize}`", inline=True)
         embed.add_field(name="📁 Category", value=f"`{category}`", inline=True)
         
         return embed
@@ -164,16 +164,29 @@ class PayoutTracker(commands.Cog):
             return "Paid out"
         return "Logged"
 
+    def extract_custom_field(self, task_data, field_id):
+        if not field_id or "custom_fields" not in task_data:
+            return "N/A"
+        for cf in task_data["custom_fields"]:
+            if cf.get("id") == field_id:
+                val = cf.get("value")
+                if val is not None:
+                    return str(val)
+        return "N/A"
+
+    def find_user_by_name(self, username):
+        username = username.strip()
+        for user in self.bot.users:
+            if user.name == username or str(user) == username:
+                return user
+        return None
+
     @tasks.loop(minutes=5)
     async def check_tasks_loop(self):
         config = await self.config.all()
         if not config["api_key"] or not config["list_id"]:
             return
             
-        tracked_tasks = config["tracked_tasks"]
-        if not tracked_tasks:
-            return
-
         url = f"https://api.clickup.com/api/v2/list/{config['list_id']}/task?include_closed=true"
         headers = {
             "Authorization": config["api_key"],
@@ -189,26 +202,73 @@ class PayoutTracker(commands.Cog):
                 api_tasks = data.get("tasks", [])
 
                 for task in api_tasks:
-                    task_id = task.get("id")
-                    if task_id in tracked_tasks:
-                        raw_status = task.get("status", {}).get("status", "").upper()
-                        due_date = task.get("due_date")
-                        
-                        if raw_status == "UNLOGGED":
-                            continue
+                    raw_status = task.get("status", {}).get("status", "").upper()
+                    
+                    if raw_status == "UNLOGGED":
+                        continue
 
-                        task_record = tracked_tasks[task_id]
-                        stored_status = task_record.get("status", "")
-                        stored_due = task_record.get("due_date")
-                        
-                        display_status = self.determine_display_status(raw_status, due_date)
-                        
-                        if raw_status != stored_status or due_date != stored_due:
-                            await self.update_user_embed(task_record, display_status, due_date)
-                            
-                            async with self.config.tracked_tasks() as t_tasks:
-                                t_tasks[task_id]["status"] = raw_status
-                                t_tasks[task_id]["due_date"] = due_date
+                    task_id = task.get("id")
+                    due_date = task.get("due_date")
+                    roblox = self.extract_custom_field(task, config["cf_roblox"])
+                    prize = self.extract_custom_field(task, config["cf_prize"])
+                    category = self.extract_custom_field(task, config["cf_category"])
+                    display_status = self.determine_display_status(raw_status, due_date)
+
+                    async with self.config.tracked_tasks() as tracked_tasks:
+                        if task_id not in tracked_tasks:
+                            discord_username = task.get("name", "")
+                            user = self.find_user_by_name(discord_username)
+                            if not user:
+                                continue
+
+                            embed = self.build_embed(display_status, roblox, prize, category, due_date)
+                            msg_id = None
+                            channel_id = None
+                            try:
+                                msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
+                                msg_id = msg.id
+                                channel_id = msg.channel.id
+                            except discord.Forbidden:
+                                pass
+
+                            tracked_tasks[task_id] = {
+                                "message_id": msg_id,
+                                "channel_id": channel_id,
+                                "user_id": user.id,
+                                "status": raw_status,
+                                "due_date": due_date,
+                                "roblox_username": roblox,
+                                "prize": prize,
+                                "category": category
+                            }
+                        else:
+                            task_record = tracked_tasks[task_id]
+                            stored_status = task_record.get("status", "")
+                            stored_due = task_record.get("due_date")
+                            stored_roblox = task_record.get("roblox_username", "")
+                            stored_prize = task_record.get("prize", "")
+                            stored_category = task_record.get("category", "")
+
+                            has_changed = (
+                                raw_status != stored_status or
+                                due_date != stored_due or
+                                roblox != stored_roblox or
+                                prize != stored_prize or
+                                category != stored_category
+                            )
+
+                            if has_changed:
+                                task_record["roblox_username"] = roblox
+                                task_record["prize"] = prize
+                                task_record["category"] = category
+                                
+                                await self.update_user_embed(task_record, display_status, due_date)
+                                
+                                tracked_tasks[task_id]["status"] = raw_status
+                                tracked_tasks[task_id]["due_date"] = due_date
+                                tracked_tasks[task_id]["roblox_username"] = roblox
+                                tracked_tasks[task_id]["prize"] = prize
+                                tracked_tasks[task_id]["category"] = category
 
     async def update_user_embed(self, task_record, display_status, due_date):
         try:
