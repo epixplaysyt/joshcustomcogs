@@ -1,1 +1,1 @@
-from .prizelogger import GiveawayTracker, setup
+from .prizelogger import PayoutTracker, setup
