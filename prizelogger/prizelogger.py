@@ -101,7 +101,7 @@ class PayoutTracker(commands.Cog):
                     msg_id = None
                     channel_id = None
                     try:
-                        msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
+                        msg = await user.send(content="👋 Congratulations! You have a payout logged!", embed=embed)
                         msg_id = msg.id
                         channel_id = msg.channel.id
                     except discord.Forbidden:
@@ -142,7 +142,7 @@ class PayoutTracker(commands.Cog):
             title="💸 Payout Status",
             color=color_map.get(display_status, discord.Color.blue())
         )
-        embed.add_field(name="📊 Current Status", value=f"{status_emoji} **{display_status}**", inline=False)
+        embed.add_field(name="📊 Current Status", value=f"{status_emoji} {display_status}", inline=False)
         
         if display_status == "Scheduled" and due_date:
             try:
