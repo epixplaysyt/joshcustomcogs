@@ -3,7 +3,7 @@ import discord
 from redbot.core import commands, Config
 from discord.ext import tasks
 
-class GiveawayTracker(commands.Cog):
+class PayoutTracker(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
@@ -18,7 +18,11 @@ class GiveawayTracker(commands.Cog):
             "cf_authoriser": None,
             "tracked_tasks": {}
         }
+        default_guild = {
+            "payout_role": None
+        }
         self.config.register_global(**default_global)
+        self.config.register_guild(**default_guild)
         self.check_tasks_loop.start()
 
     def cog_unload(self):
@@ -47,9 +51,21 @@ class GiveawayTracker(commands.Cog):
         await self.config.cf_authoriser.set(authoriser_id)
         await ctx.send("Custom field IDs saved successfully.")
 
+    @clickupset.command(name="role")
+    async def set_role(self, ctx, role: discord.Role):
+        await self.config.guild(ctx.guild).payout_role.set(role.id)
+        await ctx.send(f"Payout role has been set to `{role.name}`.")
+
     @commands.command()
-    @commands.has_permissions(manage_messages=True)
-    async def logpayment(self, ctx, user: discord.Member, roblox_username: str, prize: str, *, prize_category: str):
+    async def logpayout(self, ctx, user: discord.Member, roblox_username: str, prize: str, *, prize_category: str):
+        role_id = await self.config.guild(ctx.guild).payout_role()
+        if not role_id:
+            return await ctx.send("The payout role has not been configured. Use `[p]clickupset role` first.")
+            
+        has_role = any(role.id == role_id for role in ctx.author.roles)
+        if not has_role and ctx.author.id not in self.bot.owner_ids:
+            return await ctx.send("You do not have the required role to log payouts.")
+
         config = await self.config.all()
         
         if not all([config["api_key"], config["list_id"], config["cf_roblox"], config["cf_prize"], config["cf_category"], config["cf_authoriser"]]):
@@ -77,7 +93,6 @@ class GiveawayTracker(commands.Cog):
                 if response.status == 200:
                     data = await response.json()
                     task_id = data.get("id")
-                    task_url = data.get("url")
                     due_date = data.get("due_date")
                     
                     display_status = self.determine_display_status("LOGGED", due_date)
@@ -86,7 +101,7 @@ class GiveawayTracker(commands.Cog):
                     msg_id = None
                     channel_id = None
                     try:
-                        msg = await user.send(embed=embed)
+                        msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
                         msg_id = msg.id
                         channel_id = msg.channel.id
                     except discord.Forbidden:
@@ -104,7 +119,7 @@ class GiveawayTracker(commands.Cog):
                             "category": prize_category
                         }
                         
-                    await ctx.send(f"✅ Payment logged successfully for `{user.name}`!\n[View Task]({task_url})")
+                    await ctx.send(f"✅ Payout logged successfully for `{user.name}`!")
                 else:
                     error_data = await response.text()
                     await ctx.send(f"❌ Failed to create task in ClickUp. Status: {response.status}\nError: {error_data}")
@@ -115,20 +130,31 @@ class GiveawayTracker(commands.Cog):
             "Scheduled": discord.Color.gold(),
             "Paid out": discord.Color.green()
         }
+        emoji_map = {
+            "Logged": "📝",
+            "Scheduled": "⏳",
+            "Paid out": "✅"
+        }
+        
+        status_emoji = emoji_map.get(display_status, "🔍")
+        
         embed = discord.Embed(
-            title="Giveaway Payout Status",
+            title="💸 Payout Status",
             color=color_map.get(display_status, discord.Color.blue())
         )
-        embed.add_field(name="Current Status", value=display_status, inline=False)
+        embed.add_field(name="📊 Current Status", value=f"{status_emoji} **{display_status}**", inline=False)
+        
         if display_status == "Scheduled" and due_date:
             try:
                 timestamp = int(int(due_date) / 1000)
-                embed.add_field(name="Scheduled Date", value=f" ()", inline=False)
+                embed.add_field(name="🕒 Scheduled Date", value=f" ()", inline=False)
             except (ValueError, TypeError):
                 pass
-        embed.add_field(name="Roblox Username", value=roblox_username, inline=True)
-        embed.add_field(name="Prize", value=prize, inline=True)
-        embed.add_field(name="Category", value=category, inline=True)
+                
+        embed.add_field(name="🎮 Roblox Username", value=f"`{roblox_username}`", inline=True)
+        embed.add_field(name="🎁 Prize", value=f"`{prize}`", inline=True)
+        embed.add_field(name="📁 Category", value=f"`{category}`", inline=True)
+        
         return embed
 
     def determine_display_status(self, raw_status, due_date):
@@ -204,18 +230,20 @@ class GiveawayTracker(commands.Cog):
                 task_record.get("category", "N/A"),
                 due_date
             )
+            
+            content = "🔔 Hey there! The status of your payout has been updated."
 
             if task_record.get("message_id"):
                 try:
                     msg = await channel.fetch_message(task_record["message_id"])
-                    await msg.edit(embed=embed)
+                    await msg.edit(content=content, embed=embed)
                     return
                 except discord.NotFound:
                     pass
 
             user = self.bot.get_user(task_record["user_id"]) or await self.bot.fetch_user(task_record["user_id"])
             if user:
-                msg = await user.send(embed=embed)
+                msg = await user.send(content=content, embed=embed)
                 async with self.config.tracked_tasks() as t_tasks:
                     for tid, tdata in t_tasks.items():
                         if tdata.get("user_id") == task_record["user_id"]:
@@ -233,4 +261,4 @@ class GiveawayTracker(commands.Cog):
         await self.bot.wait_until_ready()
 
 async def setup(bot):
-    await bot.add_cog(GiveawayTracker(bot))
+    await bot.add_cog(PayoutTracker(bot))
