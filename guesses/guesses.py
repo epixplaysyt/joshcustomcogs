@@ -361,13 +361,16 @@ class Guesses(commands.Cog):
         if self.session_auto_mark:
             target_answer = self.session_answer.lower().strip()
             
-            guess_digits = "".join(c for c in guess_text if c.isdigit())
-            target_digits = "".join(c for c in target_answer if c.isdigit())
+            guess_digits = [c for c in guess_text if c.isdigit()]
+            target_digits = [c for c in target_answer if c.isdigit()]
             
             if guess_digits != target_digits:
                 is_correct = False
             else:
-                distance = get_edit_distance(guess_text, target_answer)
+                guess_masked = "".join('#' if c.isdigit() else c for c in guess_text)
+                target_masked = "".join('#' if c.isdigit() else c for c in target_answer)
+                
+                distance = get_edit_distance(guess_masked, target_masked)
                 is_correct = (distance <= 1)
             
             if is_correct:
