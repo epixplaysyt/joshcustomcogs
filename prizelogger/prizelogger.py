@@ -225,7 +225,7 @@ class PayoutTracker(commands.Cog):
                             msg_id = None
                             channel_id = None
                             try:
-                                msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
+                                msg = await user.send(content="🎉 **Congratulations!** You have a payout logged to be paid out!", embed=embed)
                                 msg_id = msg.id
                                 channel_id = msg.channel.id
                             except discord.Forbidden:
@@ -291,7 +291,7 @@ class PayoutTracker(commands.Cog):
                 due_date
             )
             
-            content = "🔔 Hey there! The status of your payout has been updated."
+            content = "🎉 **Congratulations!** The status of your payout has been changed!"
 
             if task_record.get("message_id"):
                 try:
