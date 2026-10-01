@@ -101,7 +101,7 @@ class PayoutTracker(commands.Cog):
                     msg_id = None
                     channel_id = None
                     try:
-                        msg = await user.send(content="👋 Hey there! Your payout has been officially logged in our system.", embed=embed)
+                        msg = await user.send(content="🎉 **Congratulations!** You have a payout logged!", embed=embed)
                         msg_id = msg.id
                         channel_id = msg.channel.id
                     except discord.Forbidden:
@@ -126,7 +126,7 @@ class PayoutTracker(commands.Cog):
 
     def build_embed(self, display_status, roblox_username, prize, category, due_date=None):
         color_map = {
-            "Logged": discord.Color.purple(),
+            "Logged": discord.Color.orange(),
             "Scheduled": discord.Color.gold(),
             "Paid out": discord.Color.green()
         }
@@ -142,18 +142,18 @@ class PayoutTracker(commands.Cog):
             title="💸 Payout Status",
             color=color_map.get(display_status, discord.Color.blue())
         )
-        embed.add_field(name="📊 Current Status", value=f"{status_emoji} **{display_status}**", inline=False)
+        embed.add_field(name="📊 Current Status", value=f"`{status_emoji} {display_status}`", inline=False)
         
         if display_status == "Scheduled" and due_date:
             try:
                 timestamp = int(int(due_date) / 1000)
-                embed.add_field(name="🕒 Scheduled Date", value=f" ()", inline=False)
+                embed.add_field(name="🕒 Scheduled Date", value=f"` ()`", inline=False)
             except (ValueError, TypeError):
                 pass
                 
-        embed.add_field(name="🎮 Roblox Username", value=f"`{roblox_username}`", inline=True)
-        embed.add_field(name="🎁 Prize", value=f"`{prize}`", inline=True)
-        embed.add_field(name="📁 Category", value=f"`{category}`", inline=True)
+        embed.add_field(name="🎮 Roblox Username:", value=f"`{roblox_username}`", inline=True)
+        embed.add_field(name="🎁 Payout:", value=f"`{prize}`", inline=True)
+        embed.add_field(name="📁 Category:", value=f"`{category}`", inline=True)
         
         return embed
 
