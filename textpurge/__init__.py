@@ -1,0 +1,1 @@
+from .textpurge import setup
