@@ -167,6 +167,11 @@ class TicketConfirmationView(discord.ui.View):
 
             if channel:
                 member = self.guild.get_member(self.user.id)
+                if not member:
+                    for g in self.cog.bot.guilds:
+                        if g != self.guild and g.get_member(self.user.id):
+                            member = g.get_member(self.user.id)
+                            break
                 role_name = member.top_role.name if member else "User"
                 ticket_id = await self.cog.config.channel(channel).ticket_id() or "UNKNOWN"
                 now = datetime.datetime.now(datetime.timezone.utc)
@@ -1089,12 +1094,16 @@ class Modmail(commands.Cog):
                 default_guild_id = await self.config.default_guild_id()
                 guild = self.bot.get_guild(default_guild_id) if default_guild_id else None
                 
+                default_guild_id = await self.config.default_guild_id()
+                guild = self.bot.get_guild(default_guild_id) if default_guild_id else None
+                user_mutual_guild = None
+                for g in self.bot.guilds:
+                    if g.id != default_guild_id and g.get_member(message.author.id):
+                        user_mutual_guild = g
+                        break
                 if not guild:  
-                    for g in self.bot.guilds:
-                        if g.get_member(message.author.id):
-                            guild = g
-                            break
-                            
+                    guild = user_mutual_guild
+                        
                 if not guild:  
                     guild = self.bot.guilds[0] if self.bot.guilds else None
 
@@ -1105,7 +1114,7 @@ class Modmail(commands.Cog):
                 if message.author.id in blocked_users:
                     return
 
-                member = guild.get_member(message.author.id)
+                member = (user_mutual_guild.get_member(message.author.id) if user_mutual_guild else None) or guild.get_member(message.author.id)
                 if member:
                     immune_roles = await self.config.guild(guild).immune_roles()
                     if any(r.id in immune_roles for r in member.roles):
