@@ -23,19 +23,6 @@ def round_score(val):
         except ValueError:
             return val_str
 
-def has_app_role():
-    async def predicate(ctx):
-        if await ctx.bot.is_owner(ctx.author):
-            return True
-        if ctx.guild and ctx.author.guild_permissions.administrator:
-            return True
-        if ctx.guild:
-            role_id = await ctx.cog.config.guild(ctx.guild).allowed_role_id()
-            if role_id and ctx.author.get_role(role_id):
-                return True
-        raise commands.UserFeedbackCheckFailure("You do not have the required role to use this command, or the role hasn't been set up yet using `setapprole`.")
-    return commands.check(predicate)
-
 
 class SearchModal(discord.ui.Modal, title='Search Candidate'):
     search_input = discord.ui.TextInput(
@@ -51,7 +38,7 @@ class SearchModal(discord.ui.Modal, title='Search Candidate'):
     async def on_submit(self, interaction: discord.Interaction):
         query = self.search_input.value.lower()
         for idx, app in enumerate(self.view.applications):
-            if query in (app["discord_username"] or "").lower():
+            if query in (app.get("discord_username") or "").lower():
                 self.view.current_index = idx
                 self.view.current_app_page = 0
                 self.view.update_buttons_and_components()
@@ -61,8 +48,9 @@ class SearchModal(discord.ui.Modal, title='Search Candidate'):
 
 
 class AppReaderView(discord.ui.View):
-    def __init__(self, applications, ctx, cog):
-        super().__init__(timeout=900)  # 15 minutes
+    def __init__(self, department: str, applications, ctx, cog):
+        super().__init__(timeout=900)
+        self.department = department
         self.applications = applications
         self.ctx = ctx
         self.cog = cog
@@ -88,8 +76,8 @@ class AppReaderView(discord.ui.View):
         for item in app["q_and_a"]:
             q = item["question"]
             a = item["answer"]
-            s = round_score(item["score"])
-            f = item["feedback"]
+            s = round_score(item.get("score"))
+            f = item.get("feedback")
             
             if not a and not s and not f:
                 continue
@@ -108,7 +96,6 @@ class AppReaderView(discord.ui.View):
                 if current_description:
                     pages.append(current_description.strip())
                 
-                # If a single massive answer surpasses limits, chunk it forcibly
                 if len(chunk) > 3900:
                     pages.append(chunk[:3900])
                     current_description = chunk[3900:]
@@ -128,7 +115,6 @@ class AppReaderView(discord.ui.View):
     def update_buttons_and_components(self):
         self.clear_items()
         
-        # --- Row 0: Application Navigation ---
         btn_prev_app = discord.ui.Button(style=discord.ButtonStyle.primary, emoji="⬅️", custom_id="prev_app", disabled=(self.current_index == 0))
         btn_prev_app.callback = self.prev_app
         self.add_item(btn_prev_app)
@@ -149,14 +135,14 @@ class AppReaderView(discord.ui.View):
         btn_vote.callback = self.vote_button
         self.add_item(btn_vote)
         
-        btn_release = discord.ui.Button(style=discord.ButtonStyle.success, label="Release Score", emoji="✉️", custom_id="release_score")
-        btn_release.callback = self.release_button
-        self.add_item(btn_release)
+        if app.get("total_score"):
+            btn_release = discord.ui.Button(style=discord.ButtonStyle.success, label="Release Score", emoji="✉️", custom_id="release_score")
+            btn_release.callback = self.release_button
+            self.add_item(btn_release)
 
-        # --- Row 1: Pagination (Only Appears if Application exceeds Discord limits) ---
         pages = self.get_app_pages()
         if len(pages) > 1:
-            btn_prev_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬆️", label="Prev Page", custom_id="prev_page", disabled=(self.current_app_page == 0), row=1)
+            btn_prev_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬆️️", label="Prev Page", custom_id="prev_page", disabled=(self.current_app_page == 0), row=1)
             btn_prev_page.callback = self.prev_page
             self.add_item(btn_prev_page)
             
@@ -204,9 +190,15 @@ class AppReaderView(discord.ui.View):
             return await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
             
         user_id = interaction.user.id
-        max_votes = await self.cog.config.guild(self.ctx.guild).max_candidates()
         
-        async with self.cog.config.guild(self.ctx.guild).apps() as saved_apps:
+        async with self.cog.config.guild(self.ctx.guild).departments() as depts:
+            dept_data = depts.get(self.department)
+            if not dept_data:
+                return await interaction.response.send_message("Department data is missing.", ephemeral=True)
+                
+            saved_apps = dept_data.get("apps", [])
+            max_votes = dept_data.get("max_candidates", 0)
+            
             if not saved_apps or self.current_index >= len(saved_apps):
                 return await interaction.response.send_message("Application data is out of sync. Please restart the viewer.", ephemeral=True)
             
@@ -217,7 +209,7 @@ class AppReaderView(discord.ui.View):
             else:
                 current_votes = sum(1 for a in saved_apps if user_id in a["votes"])
                 if current_votes >= max_votes:
-                    return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes.", ephemeral=True)
+                    return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes for this department.", ephemeral=True)
                 target_app["votes"].append(user_id)
             
             self.applications = saved_apps
@@ -230,8 +222,8 @@ class AppReaderView(discord.ui.View):
             return await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
             
         app = self.applications[self.current_index]
-        username = app["discord_username"]
-        score = round_score(app["total_score"])
+        username = app.get("discord_username")
+        score = round_score(app.get("total_score"))
         
         if not username or not score:
             return await interaction.response.send_message("This application is missing a valid Discord Username or Total Score.", ephemeral=True)
@@ -259,68 +251,96 @@ class AppReaderView(discord.ui.View):
         pages = self.get_app_pages()
         
         embed = discord.Embed(
-            title=f"Application {self.current_index + 1} of {len(self.applications)}",
+            title=f"Application {self.current_index + 1} of {len(self.applications)} ({self.department.title()})",
             color=discord.Color.blue()
         )
         
         if len(pages) > 1:
             embed.title += f" (Page {self.current_app_page + 1} of {len(pages)})"
         
-        if app["discord_username"]:
+        if app.get("discord_username"):
             embed.set_author(name=f"User: {app['discord_username']}")
-        if app["total_score"]:
+        if app.get("total_score"):
             embed.title += f" | Total Score: {round_score(app['total_score'])}"
         
         embed.description = pages[self.current_app_page]
         return embed
+
 
 class ScoreMailer(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=823479234823, force_registration=True)
         self.config.register_guild(
-            allowed_role_id=None,
+            departments={}, 
             custom_dm_message="Congratulations for completing the tester application! This score is only part of your application.",
             custom_success_message="Congratulations! Your application has been successful and you will proceed to the next stage.",
-            custom_fail_message="Unfortunately, your application was not successful this time. Thank you for your interest.",
-            apps=[],
-            csv_text="",
-            max_candidates=0,
-            manual_success=[]
+            custom_fail_message="Unfortunately, your application was not successful this time. Thank you for your interest."
         )
+
+    async def _verify_dept_role(self, ctx, department: str):
+        if await ctx.bot.is_owner(ctx.author):
+            return True
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            return True
+            
+        depts = await self.config.guild(ctx.guild).departments()
+        dept_data = depts.get(department.lower())
+        
+        if not dept_data:
+            raise commands.UserFeedbackCheckFailure(f"Department `{department}` has not been set up yet. An admin must run `setapprole` first.")
+            
+        role_id = dept_data.get("role_id")
+        if role_id and ctx.author.get_role(role_id):
+            return True
+            
+        raise commands.UserFeedbackCheckFailure(f"You do not have the required role to access the `{department}` department.")
 
     @commands.command()
     @commands.guild_only()
     @commands.admin_or_permissions(administrator=True)
-    async def setapprole(self, ctx, role: discord.Role):
-        await self.config.guild(ctx.guild).allowed_role_id.set(role.id)
-        await ctx.send(f"✅ The application reader role has been set to **{role.name}**.")
+    async def setapprole(self, ctx, department: str, role: discord.Role):
+        dept_key = department.lower()
+        async with self.config.guild(ctx.guild).departments() as depts:
+            if dept_key not in depts:
+                depts[dept_key] = {
+                    "role_id": role.id,
+                    "apps": [],
+                    "csv_text": "",
+                    "max_candidates": 0,
+                    "manual_success": []
+                }
+            else:
+                depts[dept_key]["role_id"] = role.id
+                
+        await ctx.send(f"✅ The application reader role for **{department}** has been set to **{role.name}**.")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
+    @commands.admin_or_permissions(administrator=True)
     async def setdmmsg(self, ctx, *, message: str):
         await self.config.guild(ctx.guild).custom_dm_message.set(message)
         await ctx.send(f"✅ The custom score DM message has been updated to:\n> {message}")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
+    @commands.admin_or_permissions(administrator=True)
     async def setsuccessmsg(self, ctx, *, message: str):
         await self.config.guild(ctx.guild).custom_success_message.set(message)
         await ctx.send(f"✅ The custom successful candidate DM message has been updated to:\n> {message}")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
+    @commands.admin_or_permissions(administrator=True)
     async def setfailmsg(self, ctx, *, message: str):
         await self.config.guild(ctx.guild).custom_fail_message.set(message)
         await ctx.send(f"✅ The custom failed candidate DM message has been updated to:\n> {message}")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def uploadapps(self, ctx, max_candidates: int):
+    async def uploadapps(self, ctx, department: str, max_candidates: int):
+        await self._verify_dept_role(ctx, department)
+        
         if max_candidates <= 0:
             return await ctx.send("The maximum number of candidates must be at least 1.")
             
@@ -345,7 +365,7 @@ class ScoreMailer(commands.Cog):
             return await ctx.send("The CSV file is empty.")
             
         discord_col = 0
-        score_col = 1
+        score_col = -1
         
         for idx, header in enumerate(headers):
             h_lower = header.lower()
@@ -357,7 +377,7 @@ class ScoreMailer(commands.Cog):
         applications = []
         for row in reader:
             discord_username = row[discord_col].strip() if len(row) > discord_col else ""
-            total_score = row[score_col].strip() if len(row) > score_col else ""
+            total_score = row[score_col].strip() if score_col != -1 and len(row) > score_col else None
             
             col_map = {}
             for idx, header in enumerate(headers):
@@ -401,20 +421,28 @@ class ScoreMailer(commands.Cog):
         if not applications:
             return await ctx.send("No valid applications found in the CSV.")
 
-        await self.config.guild(ctx.guild).apps.set(applications)
-        await self.config.guild(ctx.guild).csv_text.set(text)
-        await self.config.guild(ctx.guild).max_candidates.set(max_candidates)
-        await self.config.guild(ctx.guild).manual_success.set([])
+        dept_key = department.lower()
+        async with self.config.guild(ctx.guild).departments() as depts:
+            if dept_key not in depts:
+                return await ctx.send(f"Department `{department}` is not set up.")
+            depts[dept_key]["apps"] = applications
+            depts[dept_key]["csv_text"] = text
+            depts[dept_key]["max_candidates"] = max_candidates
+            depts[dept_key]["manual_success"] = []
         
-        await ctx.send(f"Successfully loaded {len(applications)} applications. Readers can vote for up to {max_candidates} candidates to proceed.")
+        await ctx.send(f"Successfully loaded {len(applications)} applications for **{department}**. Readers can vote for up to {max_candidates} candidates to proceed.")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def replaceapps(self, ctx):
-        old_apps = await self.config.guild(ctx.guild).apps()
-        if not old_apps:
-            return await ctx.send("No applications currently exist to replace. Please use `uploadapps` first.")
+    async def replaceapps(self, ctx, department: str):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        
+        depts = await self.config.guild(ctx.guild).departments()
+        if dept_key not in depts or not depts[dept_key].get("apps"):
+            return await ctx.send(f"No applications currently exist for `{department}` to replace. Please use `uploadapps` first.")
+            
+        old_apps = depts[dept_key]["apps"]
             
         if not ctx.message.attachments:
             return await ctx.send("Please attach your updated `.csv` file to your message.")
@@ -437,7 +465,7 @@ class ScoreMailer(commands.Cog):
             return await ctx.send("The CSV file is empty.")
             
         discord_col = 0
-        score_col = 1
+        score_col = -1
         
         for idx, header in enumerate(headers):
             h_lower = header.lower()
@@ -452,7 +480,7 @@ class ScoreMailer(commands.Cog):
         
         for row in reader:
             discord_username = row[discord_col].strip() if len(row) > discord_col else ""
-            total_score = row[score_col].strip() if len(row) > score_col else ""
+            total_score = row[score_col].strip() if score_col != -1 and len(row) > score_col else None
             
             col_map = {}
             for idx, header in enumerate(headers):
@@ -502,10 +530,11 @@ class ScoreMailer(commands.Cog):
         if not applications:
             return await ctx.send("No valid applications found in the CSV.")
 
-        await self.config.guild(ctx.guild).apps.set(applications)
-        await self.config.guild(ctx.guild).csv_text.set(text)
+        async with self.config.guild(ctx.guild).departments() as dept_config:
+            dept_config[dept_key]["apps"] = applications
+            dept_config[dept_key]["csv_text"] = text
         
-        msg = f"✅ Successfully replaced **{len(applications)}** applications while preserving **{preserved_votes}** votes based on their row order."
+        msg = f"✅ Successfully replaced **{len(applications)}** applications for **{department}** while preserving **{preserved_votes}** votes based on their row order."
         new_apps_count = max(0, len(applications) - len(old_apps))
         if new_apps_count > 0:
             msg += f"\n➕ Added **{new_apps_count}** new applications from the bottom rows."
@@ -514,17 +543,20 @@ class ScoreMailer(commands.Cog):
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def readapps(self, ctx, sort: str = None):
-        apps = await self.config.guild(ctx.guild).apps()
+    async def readapps(self, ctx, department: str, sort: str = None):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        depts = await self.config.guild(ctx.guild).departments()
+        
+        apps = depts.get(dept_key, {}).get("apps", [])
         if not apps:
-            return await ctx.send("No applications have been uploaded for this server yet.")
+            return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
 
         apps_to_read = list(apps)
 
         if sort and sort.lower() in ["score", "highest", "best"]:
             def get_sort_score(app):
-                val = app["total_score"]
+                val = app.get("total_score")
                 if not val:
                     return -9999.0
                 try:
@@ -536,7 +568,7 @@ class ScoreMailer(commands.Cog):
 
             apps_to_read.sort(key=get_sort_score, reverse=True)
 
-        view = AppReaderView(apps_to_read, ctx, self)
+        view = AppReaderView(dept_key, apps_to_read, ctx, self)
         try:
             msg = await ctx.author.send(embed=view.get_embed(), view=view)
             view.message = msg
@@ -546,11 +578,14 @@ class ScoreMailer(commands.Cog):
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def rankcandidates(self, ctx):
-        apps = await self.config.guild(ctx.guild).apps()
+    async def rankcandidates(self, ctx, department: str):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        depts = await self.config.guild(ctx.guild).departments()
+        
+        apps = depts.get(dept_key, {}).get("apps", [])
         if not apps:
-            return await ctx.send("No applications have been uploaded for this server yet.")
+            return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
 
         ranked_apps = [app for app in apps if len(app["votes"]) > 0]
         
@@ -559,9 +594,9 @@ class ScoreMailer(commands.Cog):
             
         ranked_apps.sort(key=lambda x: len(x["votes"]), reverse=True)
         
-        lines = ["### 🏆 **Candidate Rankings (Voted to Proceed)**"]
+        lines = [f"### 🏆 **{department.title()} Candidate Rankings (Voted to Proceed)**"]
         for i, app in enumerate(ranked_apps, 1):
-            username = app["discord_username"] or "Unknown User"
+            username = app.get("discord_username") or "Unknown User"
             votes = len(app["votes"])
             
             member = ctx.guild.get_member_named(username)
@@ -578,44 +613,53 @@ class ScoreMailer(commands.Cog):
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def addsuccess(self, ctx, user: discord.Member):
-        apps = await self.config.guild(ctx.guild).apps()
-        if not apps:
-            return await ctx.send("No applications have been uploaded for this server yet.")
-            
-        async with self.config.guild(ctx.guild).manual_success() as manual:
+    async def addsuccess(self, ctx, department: str, user: discord.Member):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        
+        async with self.config.guild(ctx.guild).departments() as depts:
+            if dept_key not in depts or not depts[dept_key].get("apps"):
+                return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
+                
+            manual = depts[dept_key].setdefault("manual_success", [])
             if user.id not in manual:
                 manual.append(user.id)
                 
-        await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been manually added to the successful candidates list.")
+        await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been manually added to the successful candidates list for **{department}**.")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def removesuccess(self, ctx, user: discord.Member):
-        apps = await self.config.guild(ctx.guild).apps()
-        if not apps:
-            return await ctx.send("No applications have been uploaded for this server yet.")
-            
-        async with self.config.guild(ctx.guild).manual_success() as manual:
+    async def removesuccess(self, ctx, department: str, user: discord.Member):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        
+        async with self.config.guild(ctx.guild).departments() as depts:
+            if dept_key not in depts or not depts[dept_key].get("apps"):
+                return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
+                
+            manual = depts[dept_key].setdefault("manual_success", [])
             if user.id in manual:
                 manual.remove(user.id)
-                await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been removed from the manual successful candidates list.")
+                await ctx.send(f"✅ **{user.display_name}** (`{user.id}`) has been removed from the manual successful candidates list for **{department}**.")
             else:
-                await ctx.send(f"❌ **{user.display_name}** is not in the manual successful candidates list.")
+                await ctx.send(f"❌ **{user.display_name}** is not in the manual successful candidates list for **{department}**.")
 
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def mailresults(self, ctx):
-        apps = await self.config.guild(ctx.guild).apps()
+    async def mailresults(self, ctx, department: str):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        depts = await self.config.guild(ctx.guild).departments()
+        
+        dept_data = depts.get(dept_key, {})
+        apps = dept_data.get("apps", [])
+        
         if not apps:
-            return await ctx.send("No applications have been uploaded for this server yet.")
+            return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
 
-        role_id = await self.config.guild(ctx.guild).allowed_role_id()
+        role_id = dept_data.get("role_id")
         if not role_id:
-            return await ctx.send("The application reader role hasn't been set up yet. Use `setapprole`.")
+            return await ctx.send("The application reader role hasn't been set up for this department yet. Use `setapprole`.")
             
         role = ctx.guild.get_role(role_id)
         if not role:
@@ -625,16 +669,16 @@ class ScoreMailer(commands.Cog):
         reader_count = len(readers)
         
         if reader_count == 0:
-            await ctx.send("⚠️ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
+            await ctx.send("⚠️️ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
 
-        manual_success = await self.config.guild(ctx.guild).manual_success()
+        manual_success = dept_data.get("manual_success", [])
         
         successful_dms = []
         failed_dms = []
         not_found = []
 
         for app in apps:
-            username = app["discord_username"].strip()
+            username = (app.get("discord_username") or "").strip()
             if not username or username.lower() in ["username", "user", "name"]:
                 continue
                 
@@ -645,11 +689,9 @@ class ScoreMailer(commands.Cog):
                 
             is_successful = False
             
-            # Check if they have enough votes
             if reader_count > 0 and len(app["votes"]) >= reader_count:
                 is_successful = True
                 
-            # Check if they were manually added (Supports new ID method and old username method)
             if member.id in manual_success or str(member.id) in manual_success or username.lower() in manual_success:
                 is_successful = True
                 
@@ -663,7 +705,7 @@ class ScoreMailer(commands.Cog):
         if not successful_dms and not failed_dms:
             return await ctx.send("Could not find any matching users in this server to send results to.")
 
-        preview_lines = []
+        preview_lines = [f"## **{department.title()} Results Preview**"]
         if successful_dms:
             preview_lines.append("### 🟢 **Successful Candidates (Accepted):**")
             for m in successful_dms:
@@ -729,13 +771,17 @@ class ScoreMailer(commands.Cog):
                 dm_errors += 1
 
         await msg.edit(content=f"✅ **Done!**\nSuccessfully sent **{successful_sent}** acceptance DMs and **{failed_sent}** rejection DMs.\nFailed to send **{dm_errors}** DMs (users likely have DMs disabled).")
+
     @commands.command()
     @commands.guild_only()
-    @has_app_role()
-    async def mailscores(self, ctx):
-        csv_text = await self.config.guild(ctx.guild).csv_text()
+    async def mailscores(self, ctx, department: str):
+        await self._verify_dept_role(ctx, department)
+        dept_key = department.lower()
+        depts = await self.config.guild(ctx.guild).departments()
+        
+        csv_text = depts.get(dept_key, {}).get("csv_text")
         if not csv_text:
-            return await ctx.send("No applications have been uploaded for this server yet.")
+            return await ctx.send(f"No applications have been uploaded for `{department}` yet.")
 
         reader = csv.reader(io.StringIO(csv_text))
         
@@ -745,7 +791,7 @@ class ScoreMailer(commands.Cog):
             return await ctx.send("The CSV file is empty.")
             
         discord_col = 0
-        score_col = 1
+        score_col = -1
         
         for idx, header in enumerate(headers):
             h_lower = header.lower()
@@ -753,6 +799,9 @@ class ScoreMailer(commands.Cog):
                 discord_col = idx
             elif "total score" in h_lower:
                 score_col = idx
+                
+        if score_col == -1:
+            return await ctx.send(f"The applications for `{department}` do not contain a Total Score column.")
                 
         pending_dms = []
         not_found = []
@@ -762,11 +811,12 @@ class ScoreMailer(commands.Cog):
                 continue
                 
             username = row[discord_col].strip()
-            score = round_score(row[score_col].strip())
+            raw_score = row[score_col].strip()
             
-            if not username or not score or username.lower() in ["username", "user", "name"] or score.lower() in ["score", "result"]:
+            if not username or not raw_score or username.lower() in ["username", "user", "name"] or raw_score.lower() in ["score", "result"]:
                 continue
-            
+                
+            score = round_score(raw_score)
             member = ctx.guild.get_member_named(username)
             if not member:
                 not_found.append((username, score))
@@ -774,9 +824,9 @@ class ScoreMailer(commands.Cog):
                 pending_dms.append((member, score))
                 
         if not pending_dms:
-            return await ctx.send("Could not find any matching users in this server from the provided CSV.")
+            return await ctx.send("Could not find any matching users in this server with valid scores.")
             
-        preview_lines = ["### 📨 **Users to DM:**"]
+        preview_lines = [f"### 📨 **Users to DM ({department.title()}):**"]
         for member, score in pending_dms:
             preview_lines.append(f"• **{member.display_name}** (`{member.name}`) - Score: {score}")
             
