@@ -332,7 +332,7 @@ class Modmail(commands.Cog):
                         
                     embed = discord.Embed(
                         title=f"🔄 Ticket Transferred - {ticket_id}",
-                        description=f"This ticket was automatically transferred here due to a staff server destination change[span_4](start_span)[span_4](end_span).",
+                        description="This ticket was automatically transferred here due to a staff server destination change.",
                         color=discord.Color.orange(),
                         timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
@@ -504,7 +504,7 @@ class Modmail(commands.Cog):
                         
                         embed = discord.Embed(
                             title="⚠️ User Left Server",
-                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket[span_5](start_span)[span_5](end_span).",
+                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket.",
                             color=discord.Color.orange(),
                             timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
@@ -657,7 +657,7 @@ class Modmail(commands.Cog):
             color=discord.Color.green(),
             timestamp=now
         )
-        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note[span_6](start_span)[span_6](end_span)."
+        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note."
         await channel.send(content=role_mention, embed=embed)
         
         for user in users:
@@ -762,7 +762,7 @@ class Modmail(commands.Cog):
                 f"**Account Created:** {created_at}\n"
                 f"**Past Tickets:** {history_str}\n\n"
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
-                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user[span_7](start_span)[span_7](end_span).")
+                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user.")
         
         if busy_mode:
             desc += "\n\n⚠️ **Notice:** This ticket was opened during high volume congestion parameters."
@@ -1153,6 +1153,8 @@ class Modmail(commands.Cog):
 
         now = datetime.datetime.now(datetime.timezone.utc)
         clean_content = message.content
+        snippets = await self.config.guild(message.guild).snippets()
+        first_word = clean_content.split()[0][1:].lower() if clean_content.startswith("!") else ""
 
         if clean_content.startswith("!reply "):
             clean_content = clean_content[7:].strip()
@@ -1164,6 +1166,10 @@ class Modmail(commands.Cog):
         elif clean_content.startswith("!a "):
             is_anon = True
             clean_content = clean_content[3:].strip()
+        elif first_word in snippets:
+            snippet = snippets[first_word]
+            is_anon = snippet.get("anon", False)
+            clean_content = snippet["text"]
 
         attachments_data = []
         for a in message.attachments:
@@ -1421,19 +1427,15 @@ class Modmail(commands.Cog):
             
             if target_ids:
                 ctx = await self.bot.get_context(message)
+                snippets = await self.config.guild(message.guild).snippets()
+                first_word = message.content.split()[0][1:].lower() if message.content.startswith("!") else ""
                 
-                if message.content.startswith(("!reply ", "!r ", "!anon ", "!a ", "!replyto ")):
+                if message.content.startswith(("!reply ", "!r ", "!anon ", "!a ", "!replyto ")) or first_word in snippets:
                     await self._handle_staff_reply(message)
                     return
                 elif message.content.startswith("!"):
-                    snippets = await self.config.guild(message.guild).snippets()
-                    first_word = message.content.split()[0][1:]
-                    if first_word in snippets:
-                        snippet = snippets[first_word]
-                        await self._handle_staff_reply(message, is_anon=snippet.get("anon", False))
+                    if ctx.valid:
                         return
-                    elif ctx.valid:
-                        return  
                 elif ctx.valid:
                     return  
 
@@ -1661,7 +1663,7 @@ class Modmail(commands.Cog):
         await interaction.channel.set_permissions(esc_role, read_messages=True, send_messages=True)
 
         embed = discord.Embed(
-            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}[span_8](start_span)[span_8](end_span).",
+            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}.",
             color=discord.Color.red(),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -1706,7 +1708,7 @@ class Modmail(commands.Cog):
         await self.config.channel(interaction.channel).department.set(department)
         
         success_embed = discord.Embed(
-            description=f"✅ Ticket moved to the **{department.title()}** department[span_9](start_span)[span_9](end_span).",
+            description=f"✅ Ticket moved to the **{department.title()}** department.",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=success_embed, ephemeral=silent)
@@ -1856,7 +1858,7 @@ class Modmail(commands.Cog):
         
         if old_guild and old_guild != ctx.guild:
             await self._migrate_tickets_to_new_guild(old_guild, ctx.guild)
-            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here[span_10](start_span)[span_10](end_span).")
+            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here.")
         else:
             await ctx.send(f"✅ **{ctx.guild.name}** has been established as the destination server.")
 
