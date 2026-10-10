@@ -184,7 +184,7 @@ class TicketConfirmationView(discord.ui.View):
                     color=discord.Color.blue(), 
                     timestamp=now
                 )
-                embed.set_author(name=self.user.name, icon_url=self.user.display_avatar.url)
+                embed.set_author(name=self.user.name, icon_url=self.user.display_avatar.url, url=f"https://discord.com/users/{self.user.id}")
                 embed.set_footer(text=f"User ID: {self.user.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
                 await channel.send(embed=embed, files=files)
@@ -325,14 +325,14 @@ class Modmail(commands.Cog):
                             elif not om.author.bot:
                                 files = [await a.to_file() for a in om.attachments]
                                 embed = discord.Embed(description=om.content, timestamp=om.created_at, color=discord.Color.blue())
-                                embed.set_author(name=om.author.name, icon_url=om.author.display_avatar.url)
+                                embed.set_author(name=om.author.name, icon_url=om.author.display_avatar.url, url=f"https://discord.com/users/{om.author.id}")
                                 await new_channel.send(embed=embed, files=files)
                     except Exception:
                         pass
                         
                     embed = discord.Embed(
                         title=f"🔄 Ticket Transferred - {ticket_id}",
-                        description=f"This ticket was automatically transferred here due to a staff server destination change[span_1](start_span)[span_1](end_span).",
+                        description=f"This ticket was automatically transferred here due to a staff server destination change[span_4](start_span)[span_4](end_span).",
                         color=discord.Color.orange(),
                         timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
@@ -504,7 +504,7 @@ class Modmail(commands.Cog):
                         
                         embed = discord.Embed(
                             title="⚠️ User Left Server",
-                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket[span_2](start_span)[span_2](end_span).",
+                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket[span_5](start_span)[span_5](end_span).",
                             color=discord.Color.orange(),
                             timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
@@ -543,7 +543,7 @@ class Modmail(commands.Cog):
                         color=discord.Color.blue(),
                         timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
-                    embed.set_author(name=f"{username}", icon_url=user.display_avatar.url if user else None)
+                    embed.set_author(name=f"{username}", icon_url=user.display_avatar.url if user else None, url=f"https://discord.com/users/{payload.user_id}")
                     embed.add_field(name="To Message", value=f"> {msg_content}", inline=False)
                     
                     await ticket_channel.send(embed=embed)
@@ -590,7 +590,7 @@ class Modmail(commands.Cog):
                     color=discord.Color.green(),
                     timestamp=now
                 )
-                embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None)
+                embed.set_author(name=member.display_name if member else "Staff", icon_url=member.display_avatar.url if member else None, url=f"https://discord.com/users/{payload.user_id}")
                 embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 embed.add_field(name="To Message", value=f"> {msg_content}", inline=False)
                 
@@ -657,7 +657,7 @@ class Modmail(commands.Cog):
             color=discord.Color.green(),
             timestamp=now
         )
-        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note[span_3](start_span)[span_3](end_span)."
+        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note[span_6](start_span)[span_6](end_span)."
         await channel.send(content=role_mention, embed=embed)
         
         for user in users:
@@ -743,6 +743,15 @@ class Modmail(commands.Cog):
             last_time_str = f"<t:{int(last_ticket_time)}:R>" if last_ticket_time else "Unknown"
             history_str = f"{history_count} previous ticket(s)\n**Last Ticket:** {last_time_str}"
 
+        main_guild = await self._get_main_guild(guild)
+        member = main_guild.get_member(user.id)
+        if not member:
+            for g in self.bot.guilds:
+                if g.get_member(user.id):
+                    member = g.get_member(user.id)
+                    break
+        role_name = member.top_role.name if member else "User"
+
         embed = discord.Embed(
             title=f"🎫 Ticket Created - {ticket_id}",
             color=discord.Color.green(),
@@ -753,7 +762,7 @@ class Modmail(commands.Cog):
                 f"**Account Created:** {created_at}\n"
                 f"**Past Tickets:** {history_str}\n\n"
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
-                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user[span_4](start_span)[span_4](end_span).")
+                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user[span_7](start_span)[span_7](end_span).")
         
         if busy_mode:
             desc += "\n\n⚠️ **Notice:** This ticket was opened during high volume congestion parameters."
@@ -1219,10 +1228,10 @@ class Modmail(commands.Cog):
 
                     if is_anon:
                         guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
-                        user_embed.set_author(name="Support Team", icon_url=guild_icon)
+                        user_embed.set_author(name="Support Team", icon_url=guild_icon, url=f"https://discord.com/users/{message.author.id}")
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                     else:
-                        user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
+                        user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                     
                     await user.send(embed=user_embed, files=get_files())
@@ -1241,9 +1250,9 @@ class Modmail(commands.Cog):
                 chan_embed.title = "📢 Broadcasted to ALL users"
 
         if is_anon:
-            chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url)
+            chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
         else:
-            chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
+            chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
             
         chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
         
@@ -1305,7 +1314,7 @@ class Modmail(commands.Cog):
                 files = [await a.to_file() for a in message.attachments]
                 embed_desc = message.content if message.content else None
                 embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
-                embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
                 embed.set_footer(text=f"User ID: {message.author.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                 
                 if reply_author and reply_text:
@@ -1371,7 +1380,7 @@ class Modmail(commands.Cog):
                             files = [await a.to_file() for a in message.attachments]
                             embed_desc = message.content if message.content else None
                             embed = discord.Embed(description=embed_desc, color=discord.Color.blue(), timestamp=now)
-                            embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url)
+                            embed.set_author(name=message.author.name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
                             embed.set_footer(text=f"User ID: {message.author.id} | Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
                             
                             if reply_author and reply_text:
@@ -1454,7 +1463,7 @@ class Modmail(commands.Cog):
                     color=discord.Color.gold(),
                     timestamp=now
                 )
-                note_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url)
+                note_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
                 await message.channel.send(embed=note_embed, files=get_files())
 
                 pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
@@ -1541,7 +1550,7 @@ class Modmail(commands.Cog):
                         timestamp=m.created_at,
                         color=discord.Color.blue() if m.author == user else discord.Color.green()
                     )
-                    embed.set_author(name=m.author.name, icon_url=m.author.display_avatar.url)
+                    embed.set_author(name=m.author.name, icon_url=m.author.display_avatar.url, url=f"https://discord.com/users/{m.author.id}")
                     files = [await a.to_file() for a in m.attachments]
                     await interaction.channel.send(embed=embed, files=files)
                     loaded_count += 1
@@ -1568,6 +1577,8 @@ class Modmail(commands.Cog):
                 self.guild = guild
                 self.reference = reference
                 self.attachments = attachments
+                self.mentions = []
+                self.role_mentions = []
             async def delete(self):
                 pass
         
@@ -1592,6 +1603,8 @@ class Modmail(commands.Cog):
                 self.guild = guild
                 self.reference = reference
                 self.attachments = attachments
+                self.mentions = []
+                self.role_mentions = []
             async def delete(self):
                 pass
 
@@ -1648,7 +1661,7 @@ class Modmail(commands.Cog):
         await interaction.channel.set_permissions(esc_role, read_messages=True, send_messages=True)
 
         embed = discord.Embed(
-            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}[span_5](start_span)[span_5](end_span).",
+            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}[span_8](start_span)[span_8](end_span).",
             color=discord.Color.red(),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -1693,7 +1706,7 @@ class Modmail(commands.Cog):
         await self.config.channel(interaction.channel).department.set(department)
         
         success_embed = discord.Embed(
-            description=f"✅ Ticket moved to the **{department.title()}** department[span_6](start_span)[span_6](end_span).",
+            description=f"✅ Ticket moved to the **{department.title()}** department[span_9](start_span)[span_9](end_span).",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=success_embed, ephemeral=silent)
@@ -1843,7 +1856,7 @@ class Modmail(commands.Cog):
         
         if old_guild and old_guild != ctx.guild:
             await self._migrate_tickets_to_new_guild(old_guild, ctx.guild)
-            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here[span_7](start_span)[span_7](end_span).")
+            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here[span_10](start_span)[span_10](end_span).")
         else:
             await ctx.send(f"✅ **{ctx.guild.name}** has been established as the destination server.")
 
