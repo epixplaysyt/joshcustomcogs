@@ -316,7 +316,6 @@ class Modmail(commands.Cog):
                     for uid in target_ids:
                         await self.config.user_from_id(uid).active_channel_id.set(new_channel.id)
                         
-                    # Copy old messages over so nothing is lost
                     try:
                         old_messages = [m async for m in channel.history(limit=50, oldest_first=True)]
                         for om in old_messages:
@@ -333,7 +332,7 @@ class Modmail(commands.Cog):
                         
                     embed = discord.Embed(
                         title=f"🔄 Ticket Transferred - {ticket_id}",
-                        description=f"This ticket was automatically transferred here due to a staff server destination change[span_4](start_span)[span_4](end_span).",
+                        description=f"This ticket was automatically transferred here due to a staff server destination change[span_1](start_span)[span_1](end_span).",
                         color=discord.Color.orange(),
                         timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
@@ -505,7 +504,7 @@ class Modmail(commands.Cog):
                         
                         embed = discord.Embed(
                             title="⚠️ User Left Server",
-                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket[span_5](start_span)[span_5](end_span).",
+                            description=f"**{member.name}** (`{member.id}`) has left the server and was removed from this group ticket[span_2](start_span)[span_2](end_span).",
                             color=discord.Color.orange(),
                             timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
@@ -658,7 +657,7 @@ class Modmail(commands.Cog):
             color=discord.Color.green(),
             timestamp=now
         )
-        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note[span_6](start_span)[span_6](end_span)."
+        embed.description = f"Support group channel created for:\n{users_desc}\n**Ticket ID:** `{ticket_id}`\n\nUse `!reply <message>` to reply to all, `!replyto <user> <message>` to reply to a specific user, or send a message directly for an internal note[span_3](start_span)[span_3](end_span)."
         await channel.send(content=role_mention, embed=embed)
         
         for user in users:
@@ -754,7 +753,7 @@ class Modmail(commands.Cog):
                 f"**Account Created:** {created_at}\n"
                 f"**Past Tickets:** {history_str}\n\n"
                 f"**Avg Response Time ({'In-Hours' if in_hours else 'Out-of-Hours'}):** `{avg_str}`\n\n"
-                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user[span_7](start_span)[span_7](end_span).")
+                f"Type normally to send **Internal Notes**. Use `!reply <text>` or `!anon <text>` to respond to the user[span_4](start_span)[span_4](end_span).")
         
         if busy_mode:
             desc += "\n\n⚠️ **Notice:** This ticket was opened during high volume congestion parameters."
@@ -1504,9 +1503,9 @@ class Modmail(commands.Cog):
         await interaction.followup.send(f"✅ Group ticket created: {channel.mention}")
 
     @ticket_group.command(name="loadmessages", description="Load recent messages from the user's DM history into this ticket channel.")
-    @app_commands.describe(limit="Number of recent messages to load (default 25, max 100).")
+    @app_commands.describe(limit="Number of recent messages to load (default 50, max 200).")
     @app_commands.default_permissions(manage_messages=True)
-    async def ticket_loadmessages(self, interaction: discord.Interaction, limit: int = 25):
+    async def ticket_loadmessages(self, interaction: discord.Interaction, limit: int = 50):
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1514,7 +1513,7 @@ class Modmail(commands.Cog):
         if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        limit = max(1, min(limit, 100))
+        limit = max(1, min(limit, 200))
         await interaction.response.defer(ephemeral=True)
         
         loaded_count = 0
@@ -1524,7 +1523,8 @@ class Modmail(commands.Cog):
                 continue
             try:
                 dm_channel = user.dm_channel or await user.create_dm()
-                messages = [m async for m in dm_channel.history(limit=limit, oldest_first=True)]
+                messages = [m async for m in dm_channel.history(limit=limit, oldest_first=False)]
+                messages.reverse()
                 
                 header_embed = discord.Embed(
                     title=f"📥 Loaded Messages for {user.name}",
@@ -1648,7 +1648,7 @@ class Modmail(commands.Cog):
         await interaction.channel.set_permissions(esc_role, read_messages=True, send_messages=True)
 
         embed = discord.Embed(
-            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}[span_8](start_span)[span_8](end_span).",
+            description=f"🚨 **Ticket Escalated!** Normal department role removed and ticket transferred to {esc_role.mention}[span_5](start_span)[span_5](end_span).",
             color=discord.Color.red(),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -1693,7 +1693,7 @@ class Modmail(commands.Cog):
         await self.config.channel(interaction.channel).department.set(department)
         
         success_embed = discord.Embed(
-            description=f"✅ Ticket moved to the **{department.title()}** department[span_9](start_span)[span_9](end_span).",
+            description=f"✅ Ticket moved to the **{department.title()}** department[span_6](start_span)[span_6](end_span).",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=success_embed, ephemeral=silent)
@@ -1843,7 +1843,7 @@ class Modmail(commands.Cog):
         
         if old_guild and old_guild != ctx.guild:
             await self._migrate_tickets_to_new_guild(old_guild, ctx.guild)
-            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here[span_10](start_span)[span_10](end_span).")
+            await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here[span_7](start_span)[span_7](end_span).")
         else:
             await ctx.send(f"✅ **{ctx.guild.name}** has been established as the destination server.")
 
