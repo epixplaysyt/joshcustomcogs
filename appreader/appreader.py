@@ -142,11 +142,11 @@ class AppReaderView(discord.ui.View):
 
         pages = self.get_app_pages()
         if len(pages) > 1:
-            btn_prev_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬆️️", label="Prev Page", custom_id="prev_page", disabled=(self.current_app_page == 0), row=1)
+            btn_prev_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬆", label="Prev Page", custom_id="prev_page", disabled=(self.current_app_page == 0), row=1)
             btn_prev_page.callback = self.prev_page
             self.add_item(btn_prev_page)
             
-            btn_next_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬇️", label="Next Page", custom_id="next_page", disabled=(self.current_app_page == len(pages) - 1), row=1)
+            btn_next_page = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⬇", label="Next Page", custom_id="next_page", disabled=(self.current_app_page == len(pages) - 1), row=1)
             btn_next_page.callback = self.next_page
             self.add_item(btn_next_page)
 
@@ -669,7 +669,7 @@ class ScoreMailer(commands.Cog):
         reader_count = len(readers)
         
         if reader_count == 0:
-            await ctx.send("⚠️️ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
+            await ctx.send("⚠ Warning: Nobody currently has the application reader role. Only manually added users will pass.")
 
         manual_success = dept_data.get("manual_success", [])
         
