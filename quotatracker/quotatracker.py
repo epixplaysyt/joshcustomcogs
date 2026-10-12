@@ -23,7 +23,7 @@ class HistoryPaginator(discord.ui.View):
     def make_embed(self) -> discord.Embed:
         if not self.pages:
             return discord.Embed(
-                title=f"Quota History — {self.target_user.display_name}",
+                title=f"Quota History - {self.target_user.display_name}",
                 description="No tracking history found for this user.",
                 color=discord.Color.red()
             )
@@ -33,7 +33,7 @@ class HistoryPaginator(discord.ui.View):
         status_icon = "✅ Met" if entry.get("met") else "❌ Incomplete"
 
         embed = discord.Embed(
-            title=f"Quota Activity — {self.target_user.display_name}",
+            title=f"Quota Activity - {self.target_user.display_name}",
             color=discord.Color.green() if entry.get("met") else discord.Color.blue()
         )
         embed.set_thumbnail(url=self.target_user.display_avatar.url)
