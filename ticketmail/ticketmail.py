@@ -1019,23 +1019,14 @@ class Modmail(commands.Cog):
             return
 
         clean_content = message.content
+        lower_content = clean_content.lower()
         snippets = await self.config.guild(message.guild).snippets()
         first_word = clean_content.split()[0][1:].lower() if clean_content.startswith("!") else ""
 
         is_anon = False
         specific_target_id = None
 
-        if clean_content.startswith("!reply "):
-            clean_content = clean_content[7:].strip()
-        elif clean_content.startswith("!anon "):
-            is_anon = True
-            clean_content = clean_content[6:].strip()
-        elif clean_content.startswith("!r "):
-            clean_content = clean_content[3:].strip()
-        elif clean_content.startswith("!a "):
-            is_anon = True
-            clean_content = clean_content[3:].strip()
-        elif clean_content.startswith("!replyto ") or clean_content.startswith("!rt "):
+        if lower_content.startswith(("!replyto ", "!rt ")):
             parts = clean_content.split(maxsplit=2)
             if len(parts) >= 2:
                 target_str = parts[1].strip("<@!>")
@@ -1046,10 +1037,22 @@ class Modmail(commands.Cog):
                     clean_content = parts[2] if len(parts) > 2 else ""
                 except ValueError:
                     pass
+        elif lower_content == "!reply" or lower_content.startswith("!reply "):
+            clean_content = clean_content[6:].strip() if len(clean_content) > 6 else ""
+        elif lower_content == "!anon" or lower_content.startswith("!anon "):
+            is_anon = True
+            clean_content = clean_content[5:].strip() if len(clean_content) > 5 else ""
+        elif lower_content == "!r" or lower_content.startswith("!r "):
+            clean_content = clean_content[2:].strip() if len(clean_content) > 2 else ""
+        elif lower_content == "!a" or lower_content.startswith("!a "):
+            is_anon = True
+            clean_content = clean_content[2:].strip() if len(clean_content) > 2 else ""
         elif first_word in snippets:
             snippet = snippets[first_word]
             is_anon = snippet.get("anon", False)
             clean_content = snippet["text"]
+        else:
+            return
 
         attachments_data = []
         for a in message.attachments:
@@ -1238,8 +1241,9 @@ class Modmail(commands.Cog):
                 ctx = await self.bot.get_context(message)
                 snippets = await self.config.guild(message.guild).snippets()
                 first_word = message.content.split()[0][1:].lower() if message.content.startswith("!") else ""
+                lower_msg = message.content.lower()
                 
-                if message.content.startswith(("!reply ", "!r ", "!anon ", "!a ", "!replyto ", "!rt ")) or first_word in snippets:
+                if lower_msg.startswith(("!reply", "!r", "!anon", "!a", "!replyto", "!rt")) or first_word in snippets:
                     await self._handle_staff_reply(message)
                     return
                 elif message.content.startswith("!"):
