@@ -939,7 +939,78 @@ class Modmail(commands.Cog):
         await self.config.channel(channel).clear()
         await channel.delete(reason=f"Modmail closure by {closer_display}")
 
-    async def _handle_staff_reply(self, message: discord.Message, is_anon: bool = False, specific_target_id: int = None):
+    async def _execute_staff_reply_action(self, channel: discord.TextChannel, author: discord.User, content: str, anonymous: bool, attachments: list, specific_target_id: int = None):
+        owner_ids = await self.config.channel(channel).owner_ids()
+        legacy_id = await self.config.channel(channel).owner_id()
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if not target_ids:
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        main_guild = await self._get_main_guild(channel.guild)
+        member = main_guild.get_member(author.id) or channel.guild.get_member(author.id)
+        staff_name = member.display_name if member else author.display_name
+        
+        embed_desc = content if content else None
+
+        waiting_since = await self.config.channel(channel).waiting_since()
+        if waiting_since:
+            wait_time = now.timestamp() - waiting_since
+            dept = await self.config.channel(channel).department()
+            hours = await self.config.guild(channel.guild).support_hours()
+            was_in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
+            
+            await self.update_average(channel.guild, dept, wait_time, was_in_hours)
+            await self.config.channel(channel).waiting_since.set(None)
+
+        ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
+        role_name = member.top_role.name if member else "Staff"
+        date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
+
+        def get_files():
+            return [discord.File(io.BytesIO(b), filename=fn) for b, fn in attachments]
+
+        actual_targets = [specific_target_id] if specific_target_id and specific_target_id in target_ids else target_ids
+
+        for uid in actual_targets:
+            user = self.bot.get_user(uid)
+            if user:
+                try:
+                    user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
+                    if anonymous:
+                        guild_icon = channel.guild.icon.url if channel.guild.icon else self.bot.user.display_avatar.url
+                        user_embed.set_author(name="Support Team", icon_url=guild_icon, url=f"https://discord.com/users/{author.id}")
+                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
+                    else:
+                        user_embed.set_author(name=staff_name, icon_url=author.display_avatar.url, url=f"https://discord.com/users/{author.id}")
+                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+                    
+                    await user.send(embed=user_embed, files=get_files())
+                except discord.Forbidden:
+                    error_embed = discord.Embed(description=f"❌ Error: Could not DM <@{uid}>.", color=discord.Color.red())
+                    await channel.send(embed=error_embed)
+
+        chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if anonymous else discord.Color.light_embed(), timestamp=now)
+        
+        if len(target_ids) > 1:
+            if specific_target_id and specific_target_id in target_ids:
+                t_user = self.bot.get_user(specific_target_id)
+                t_name = t_user.name if t_user else str(specific_target_id)
+                chan_embed.title = f"🔒 Sent ONLY to {t_name}"
+            else:
+                chan_embed.title = "📢 Broadcasted to ALL users"
+
+        if anonymous:
+            chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=author.display_avatar.url, url=f"https://discord.com/users/{author.id}")
+        else:
+            chan_embed.set_author(name=staff_name, icon_url=author.display_avatar.url, url=f"https://discord.com/users/{author.id}")
+            
+        chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
+        
+        await channel.send(embed=chan_embed, files=get_files())
+
+    async def _handle_staff_reply(self, message: discord.Message):
         owner_ids = await self.config.channel(message.channel).owner_ids()
         legacy_id = await self.config.channel(message.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -947,10 +1018,12 @@ class Modmail(commands.Cog):
         if not target_ids:
             return
 
-        now = datetime.datetime.now(datetime.timezone.utc)
         clean_content = message.content
         snippets = await self.config.guild(message.guild).snippets()
         first_word = clean_content.split()[0][1:].lower() if clean_content.startswith("!") else ""
+
+        is_anon = False
+        specific_target_id = None
 
         if clean_content.startswith("!reply "):
             clean_content = clean_content[7:].strip()
@@ -991,96 +1064,25 @@ class Modmail(commands.Cog):
         except (discord.Forbidden, discord.NotFound):
             pass
 
-        def get_files():
-            return [discord.File(io.BytesIO(b), filename=fn) for b, fn in attachments_data]
+        if specific_target_id:
+            await self._execute_staff_reply_action(
+                channel=message.channel,
+                author=message.author,
+                content=clean_content,
+                anonymous=is_anon,
+                attachments=attachments_data,
+                specific_target_id=specific_target_id
+            )
+            return
 
-        main_guild = await self._get_main_guild(message.guild)
-        member = main_guild.get_member(message.author.id) or message.guild.get_member(message.author.id)
-        staff_name = member.display_name if member else message.author.display_name
-        
-        embed_desc = clean_content if clean_content else None
-
-        waiting_since = await self.config.channel(message.channel).waiting_since()
-        if waiting_since:
-            wait_time = now.timestamp() - waiting_since
-            dept = await self.config.channel(message.channel).department()
-            hours = await self.config.guild(message.guild).support_hours()
-            was_in_hours = self.is_in_hours(hours.get('start'), hours.get('end'))
-            
-            await self.update_average(message.guild, dept, wait_time, was_in_hours)
-            await self.config.channel(message.channel).waiting_since.set(None)
-
-        ticket_id = await self.config.channel(message.channel).ticket_id() or "UNKNOWN"
-        role_name = member.top_role.name if member else "Staff"
-        date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
-        reply_author, reply_text = await self._get_reply_context(message)
-
-        if not specific_target_id and message.reference and message.reference.resolved:
-            ref_msg = message.reference.resolved
-            if isinstance(ref_msg, discord.Message) and ref_msg.embeds and ref_msg.author.bot:
-                footer_text = ref_msg.embeds[0].footer.text or ""
-                if "User ID:" in footer_text:
-                    try:
-                        for part in footer_text.split("|"):
-                            if "User ID:" in part.strip():
-                                specific_target_id = int(part.replace("User ID:", "").strip())
-                                break
-                    except Exception:
-                        pass
-
-        actual_targets = [specific_target_id] if specific_target_id and specific_target_id in target_ids else target_ids
-
-        for uid in actual_targets:
-            user = self.bot.get_user(uid)
-            if user:
-                try:
-                    user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
-                    
-                    if reply_author and reply_text:
-                        user_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
-
-                    if is_anon:
-                        guild_icon = message.guild.icon.url if message.guild.icon else self.bot.user.display_avatar.url
-                        user_embed.set_author(name="Support Team", icon_url=guild_icon, url=f"https://discord.com/users/{message.author.id}")
-                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
-                    else:
-                        user_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
-                        user_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-                    
-                    await user.send(embed=user_embed, files=get_files())
-                except discord.Forbidden:
-                    error_embed = discord.Embed(description=f"❌ Error: Could not DM <@{uid}>.", color=discord.Color.red())
-                    await message.channel.send(embed=error_embed)
-
-        chan_embed = discord.Embed(description=embed_desc, color=discord.Color.dark_grey() if is_anon else discord.Color.light_embed(), timestamp=now)
-        
-        if len(target_ids) > 1:
-            if specific_target_id and specific_target_id in target_ids:
-                t_user = self.bot.get_user(specific_target_id)
-                t_name = t_user.name if t_user else str(specific_target_id)
-                chan_embed.title = f"🔒 Sent ONLY to {t_name}"
-            else:
-                chan_embed.title = "📢 Broadcasted to ALL users"
-
-        if is_anon:
-            chan_embed.set_author(name=f"[Anonymous] {staff_name}", icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
-        else:
-            chan_embed.set_author(name=staff_name, icon_url=message.author.display_avatar.url, url=f"https://discord.com/users/{message.author.id}")
-            
-        chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
-        
-        if reply_author and reply_text:
-            chan_embed.add_field(name=f"💬 Replying to {reply_author}", value=f"> {reply_text}", inline=False)
-            
-        await message.channel.send(embed=chan_embed, files=get_files())
-
-        pings = [m.mention for m in message.mentions] + [r.mention for r in message.role_mentions]
-        if pings:
-            try:
-                ghost = await message.channel.send(" ".join(pings))
-                await ghost.delete()
-            except Exception:
-                pass
+        view = ReplyConfirmationView(self, message.author, clean_content, is_anon, attachments=attachments_data)
+        embed = discord.Embed(
+            title="⚠️ Confirm Broadcast Reply",
+            description=f"This ticket has **{len(target_ids)} user(s)**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {clean_content or '*[Attachment Only]*'}",
+            color=discord.Color.orange()
+        )
+        conf_msg = await message.channel.send(embed=embed, view=view)
+        view.message = conf_msg
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -1379,7 +1381,7 @@ class Modmail(commands.Cog):
         if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        view = ReplyConfirmationView(self, interaction.user, message, anonymous)
+        view = ReplyConfirmationView(self, interaction.user, message, anonymous, attachments=[])
         embed = discord.Embed(
             title="⚠️ Confirm Broadcast Reply",
             description=f"This ticket has **{len(target_ids)} user(s)**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {message}",
@@ -1416,7 +1418,7 @@ class Modmail(commands.Cog):
                 pass
 
         dummy = DummyMsg(interaction.channel, interaction.user, message, interaction.guild, None, [])
-        await self._handle_staff_reply(dummy, specific_target_id=clean_id)
+        await self._execute_staff_reply_action(interaction.channel, interaction.user, message, False, [], specific_target_id=clean_id)
         
         target_user = self.bot.get_user(clean_id)
         name = target_user.name if target_user else str(clean_id)
