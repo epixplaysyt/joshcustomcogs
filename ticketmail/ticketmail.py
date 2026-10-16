@@ -5,7 +5,7 @@ from discord.ext import tasks
 import io
 import datetime
 
-from .views import EmbedBuilderView, TicketConfirmationView
+from .views import EmbedBuilderView, TicketConfirmationView, ReplyConfirmationView
 
 class Modmail(commands.Cog):
     def __init__(self, bot):
@@ -1228,8 +1228,8 @@ class Modmail(commands.Cog):
                     pass
 
         else:
-            owner_ids = await self.config.channel(channel).owner_ids()
-            legacy_id = await self.config.channel(channel).owner_id()
+            owner_ids = await self.config.channel(message.channel).owner_ids()
+            legacy_id = await self.config.channel(message.channel).owner_id()
             target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
             
             if target_ids:
@@ -1374,8 +1374,21 @@ class Modmail(commands.Cog):
     async def ticket_reply_cmd(self, interaction: discord.Interaction, message: str, anonymous: bool = False):
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_ids and not legacy_id:
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
+
+        if len(target_ids) > 1:
+            view = ReplyConfirmationView(self, interaction.user, message, anonymous)
+            embed = discord.Embed(
+                title="⚠️ Confirm Broadcast Reply",
+                description=f"This ticket has **{len(target_ids)} users**. Are you sure you want to send this to all users in the group?\n\n**Message:**\n> {message}",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            view.message = await interaction.original_response()
+            return
 
         await interaction.response.defer(ephemeral=True)
         class DummyMsg:
@@ -1428,6 +1441,18 @@ class Modmail(commands.Cog):
         target_user = self.bot.get_user(clean_id)
         name = target_user.name if target_user else str(clean_id)
         await interaction.followup.send(f"✅ Reply sent specifically to {name}.", ephemeral=True)
+
+    @ticket_replyto_cmd.autocomplete('user_id')
+    async def replyto_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        owner_ids = await self.config.channel(interaction.channel).owner_ids() or []
+        choices = []
+        for uid in owner_ids:
+            user = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
+            if user:
+                name = f"{user.name} ({uid})"
+                if current.lower() in name.lower() or current in str(uid):
+                    choices.append(app_commands.Choice(name=name, value=str(uid)))
+        return choices[:25]
 
     @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
     @app_commands.default_permissions(manage_messages=True)
