@@ -205,3 +205,59 @@ class TicketConfirmationView(discord.ui.View):
                 await self.message.edit(content="⏳ Ticket creation timed out.", view=None)
         except Exception:
             pass
+
+class ReplyConfirmationView(discord.ui.View):
+    def __init__(self, cog, author: discord.User, message_content: str, anonymous: bool):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.author = author
+        self.message_content = message_content
+        self.anonymous = anonymous
+        self.message = None
+
+    @discord.ui.button(label="Yes, Send to All", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_reply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+        
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        
+        await interaction.response.edit_message(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
+
+        class DummyMsg:
+            def __init__(self, channel, author, content, guild, reference, attachments):
+                self.channel = channel
+                self.author = author
+                self.content = content
+                self.guild = guild
+                self.reference = reference
+                self.attachments = attachments
+                self.mentions = []
+                self.role_mentions = []
+            async def delete(self):
+                pass
+
+        dummy = DummyMsg(interaction.channel, self.author, self.message_content, interaction.guild, None, [])
+        await self.cog._handle_staff_reply(dummy, is_anon=self.anonymous)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel_reply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+        
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        
+        await interaction.response.edit_message(content="❌ **Reply cancelled.** Message was not sent.", embed=None, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            if self.message:
+                await self.message.edit(content="⏳ Confirmation timed out. Message was not sent.", embed=None, view=self)
+        except Exception:
+            pass
