@@ -1379,34 +1379,14 @@ class Modmail(commands.Cog):
         if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
-        if len(target_ids) > 1:
-            view = ReplyConfirmationView(self, interaction.user, message, anonymous)
-            embed = discord.Embed(
-                title="⚠️ Confirm Broadcast Reply",
-                description=f"This ticket has **{len(target_ids)} users**. Are you sure you want to send this to all users in the group?\n\n**Message:**\n> {message}",
-                color=discord.Color.orange()
-            )
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            view.message = await interaction.original_response()
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        class DummyMsg:
-            def __init__(self, channel, author, content, guild, reference, attachments):
-                self.channel = channel
-                self.author = author
-                self.content = content
-                self.guild = guild
-                self.reference = reference
-                self.attachments = attachments
-                self.mentions = []
-                self.role_mentions = []
-            async def delete(self):
-                pass
-        
-        dummy = DummyMsg(interaction.channel, interaction.user, message, interaction.guild, None, [])
-        await self._handle_staff_reply(dummy, is_anon=anonymous)
-        await interaction.followup.send("✅ Reply sent.", ephemeral=True)
+        view = ReplyConfirmationView(self, interaction.user, message, anonymous)
+        embed = discord.Embed(
+            title="⚠️ Confirm Broadcast Reply",
+            description=f"This ticket has **{len(target_ids)} user(s)**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {message}",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
 
     @ticket_group.command(name="replyto", description="Send a message to only one specific user in a group ticket.")
     @app_commands.describe(user_id="The User ID or mention of the user to send the message to.", message="The message content.")
