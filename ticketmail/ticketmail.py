@@ -1036,7 +1036,9 @@ class Modmail(commands.Cog):
                         specific_target_id = parsed_id
                     clean_content = parts[2] if len(parts) > 2 else ""
                 except ValueError:
-                    pass
+                    return
+            else:
+                return
         elif lower_content == "!reply" or lower_content.startswith("!reply "):
             clean_content = clean_content[6:].strip() if len(clean_content) > 6 else ""
         elif lower_content == "!anon" or lower_content.startswith("!anon "):
@@ -1243,7 +1245,7 @@ class Modmail(commands.Cog):
                 first_word = message.content.split()[0][1:].lower() if message.content.startswith("!") else ""
                 lower_msg = message.content.lower()
                 
-                if lower_msg.startswith(("!reply", "!r", "!anon", "!a", "!replyto", "!rt")) or first_word in snippets:
+                if lower_msg.startswith(("!reply ", "!replyto ", "!rt ", "!anon ", "!r ", "!a ")) or lower_msg in ("!reply", "!anon", "!r", "!a") or first_word in snippets:
                     await self._handle_staff_reply(message)
                     return
                 elif message.content.startswith("!"):
