@@ -5,7 +5,7 @@ from discord.ext import tasks
 import io
 import datetime
 
-from .views import EmbedBuilderView, TicketConfirmationView, ReplyConfirmationView
+from .views import EmbedBuilderView, TicketConfirmationView, ReplyConfirmationView, UserCloseConfirmationView
 
 class Modmail(commands.Cog):
     def __init__(self, bot):
@@ -460,7 +460,7 @@ class Modmail(commands.Cog):
             try:
                 user_embed = discord.Embed(
                     title=f"✅ Ticket Opened ({ticket_id})",
-                    description=f"You are connected to the **{department.title()}** department.",
+                    description=f"You are connected to the **{department.title()}** department.\n\n*Type `close` or `!close` here to close your ticket at any time.*",
                     color=discord.Color.green(),
                     timestamp=now
                 )
@@ -576,7 +576,7 @@ class Modmail(commands.Cog):
         try:
             user_embed = discord.Embed(
                 title=f"✅ Ticket Opened ({ticket_id})",
-                description=f"You are connected to the **{department.title()}** department.",
+                description=f"You are connected to the **{department.title()}** department.\n\n*Type `close` or `!close` here to close your ticket at any time.*",
                 color=discord.Color.green(),
                 timestamp=now
             )
@@ -1069,7 +1069,6 @@ class Modmail(commands.Cog):
         except (discord.Forbidden, discord.NotFound):
             pass
 
-        # Send immediately if single-user ticket or specific user target, otherwise prompt confirmation for groups
         if len(target_ids) == 1 or specific_target_id:
             await self._execute_staff_reply_action(
                 channel=message.channel,
@@ -1109,6 +1108,18 @@ class Modmail(commands.Cog):
                 guild = channel.guild
                 blocked_users = await self.config.guild(guild).blocked_users()
                 if message.author.id in blocked_users:
+                    return
+
+                lower_msg = message.content.lower().strip()
+                if lower_msg in ("close", "!close", "end", "!end"):
+                    view = UserCloseConfirmationView(self, message.author, channel)
+                    embed = discord.Embed(
+                        title="🔒 Close Ticket Confirmation",
+                        description="Are you sure you want to close your active support ticket?",
+                        color=discord.Color.red()
+                    )
+                    msg = await message.author.send(embed=embed, view=view)
+                    view.message = msg
                     return
 
                 waiting = await self.config.channel(channel).waiting_since()
