@@ -206,6 +206,42 @@ class TicketConfirmationView(discord.ui.View):
         except Exception:
             pass
 
+class UserCloseConfirmationView(discord.ui.View):
+    def __init__(self, cog, user: discord.User, channel: discord.TextChannel):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.user = user
+        self.channel = channel
+        self.message = None
+
+    @discord.ui.button(label="Yes, Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒")
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="🔒 **Ticket closed successfully.**", view=self)
+        await self.cog._execute_close(self.channel, reason="Closed by user request", anonymous=False, closer_id=self.user.id)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user:
+            return await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="❌ **Closure cancelled.**", view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            if self.message:
+                await self.message.edit(content="⏳ Confirmation timed out.", view=self)
+        except Exception:
+            pass
+
 class ReplyConfirmationView(discord.ui.View):
     def __init__(self, cog, author: discord.User, message_content: str, anonymous: bool, attachments=None, specific_target_id=None):
         super().__init__(timeout=300)
