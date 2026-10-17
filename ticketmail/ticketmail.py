@@ -1069,7 +1069,8 @@ class Modmail(commands.Cog):
         except (discord.Forbidden, discord.NotFound):
             pass
 
-        if specific_target_id:
+        # Send immediately if single-user ticket or specific user target, otherwise prompt confirmation for groups
+        if len(target_ids) == 1 or specific_target_id:
             await self._execute_staff_reply_action(
                 channel=message.channel,
                 author=message.author,
@@ -1083,7 +1084,7 @@ class Modmail(commands.Cog):
         view = ReplyConfirmationView(self, message.author, clean_content, is_anon, attachments=attachments_data)
         embed = discord.Embed(
             title="⚠️ Confirm Broadcast Reply",
-            description=f"This ticket has **{len(target_ids)} user(s)**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {clean_content or '*[Attachment Only]*'}",
+            description=f"This ticket has **{len(target_ids)} users**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {clean_content or '*[Attachment Only]*'}",
             color=discord.Color.orange()
         )
         conf_msg = await message.channel.send(embed=embed, view=view)
@@ -1387,10 +1388,15 @@ class Modmail(commands.Cog):
         if not target_ids:
             return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
 
+        if len(target_ids) == 1:
+            await interaction.response.defer(ephemeral=True)
+            await self._execute_staff_reply_action(interaction.channel, interaction.user, message, anonymous, [])
+            return await interaction.followup.send("✅ Reply sent.", ephemeral=True)
+
         view = ReplyConfirmationView(self, interaction.user, message, anonymous, attachments=[])
         embed = discord.Embed(
             title="⚠️ Confirm Broadcast Reply",
-            description=f"This ticket has **{len(target_ids)} user(s)**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {message}",
+            description=f"This ticket has **{len(target_ids)} users**. Are you sure you want to send this message to all users in the group?\n\n**Message:**\n> {message}",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
