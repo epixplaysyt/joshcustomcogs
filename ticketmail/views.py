@@ -145,7 +145,7 @@ class TicketConfirmationView(discord.ui.View):
             style=discord.ButtonStyle.danger, 
             custom_id=f"cancel_{guild.id}_{user.id}"
         )
-        cancel_button.callback = self.cancel_callback
+        cancel_button.callback = self.cancel_button
         self.add_item(cancel_button)
 
     def make_callback(self, dept_name):
@@ -207,12 +207,14 @@ class TicketConfirmationView(discord.ui.View):
             pass
 
 class ReplyConfirmationView(discord.ui.View):
-    def __init__(self, cog, author: discord.User, message_content: str, anonymous: bool):
+    def __init__(self, cog, author: discord.User, message_content: str, anonymous: bool, attachments=None, specific_target_id=None):
         super().__init__(timeout=300)
         self.cog = cog
         self.author = author
         self.message_content = message_content
         self.anonymous = anonymous
+        self.attachments = attachments or []
+        self.specific_target_id = specific_target_id
         self.message = None
 
     @discord.ui.button(label="Yes, Send to All", style=discord.ButtonStyle.success, emoji="✅")
@@ -224,23 +226,22 @@ class ReplyConfirmationView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         
-        await interaction.response.edit_message(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
-
-        class DummyMsg:
-            def __init__(self, channel, author, content, guild, reference, attachments):
-                self.channel = channel
-                self.author = author
-                self.content = content
-                self.guild = guild
-                self.reference = reference
-                self.attachments = attachments
-                self.mentions = []
-                self.role_mentions = []
-            async def delete(self):
+        if interaction.response.is_done():
+            try:
+                await interaction.edit_original_response(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
+            except Exception:
                 pass
+        else:
+            await interaction.response.edit_message(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
 
-        dummy = DummyMsg(interaction.channel, self.author, self.message_content, interaction.guild, None, [])
-        await self.cog._handle_staff_reply(dummy, is_anon=self.anonymous)
+        await self.cog._execute_staff_reply_action(
+            channel=interaction.channel,
+            author=self.author,
+            content=self.message_content,
+            anonymous=self.anonymous,
+            attachments=self.attachments,
+            specific_target_id=self.specific_target_id
+        )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_reply(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -251,7 +252,13 @@ class ReplyConfirmationView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         
-        await interaction.response.edit_message(content="❌ **Reply cancelled.** Message was not sent.", embed=None, view=self)
+        if interaction.response.is_done():
+            try:
+                await interaction.edit_original_response(content="❌ **Reply cancelled.** Message was not sent.", embed=None, view=self)
+            except Exception:
+                pass
+        else:
+            await interaction.response.edit_message(content="❌ **Reply cancelled.** Message was not sent.", embed=None, view=self)
 
     async def on_timeout(self):
         for child in self.children:
