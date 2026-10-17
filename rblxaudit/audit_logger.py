@@ -66,7 +66,7 @@ class AuditLogger(commands.Cog):
             is_dangerous = True
             danger_reason = f"Deleted channel: **{getattr(entry.target, 'name', 'Unknown')}**"
             
-        elif action == discord.AuditLogAction.member_ban_add:
+        elif action == discord.AuditLogAction.ban:
             is_dangerous = True
             danger_reason = f"Banned server member: **{getattr(entry.target, 'name', 'Unknown')}**"
 
