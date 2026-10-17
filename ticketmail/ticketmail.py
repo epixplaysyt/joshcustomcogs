@@ -637,6 +637,32 @@ class Modmail(commands.Cog):
 
         return channel
 
+    async def _user_initiated_close(self, user: discord.User, channel: discord.TextChannel):
+        owner_ids = await self.config.channel(channel).owner_ids()
+        legacy_id = await self.config.channel(channel).owner_id()
+        target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
+        
+        if user.id in target_ids:
+            if len(target_ids) > 1:
+                target_ids.remove(user.id)
+                await self.config.channel(channel).owner_ids.set(target_ids)
+                await self.config.user(user).active_channel_id.set(None)
+                
+                embed = discord.Embed(
+                    title="⚠️ User Closed Portion of Ticket",
+                    description=f"**{user.name}** (`{user.id}`) has closed their portion and left this group ticket.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+                await channel.send(embed=embed)
+                
+                try:
+                    await user.send(embed=discord.Embed(title="🔒 Ticket Closed", description="Your portion of the group ticket has been closed.", color=discord.Color.red()))
+                except discord.Forbidden:
+                    pass
+            else:
+                await self._execute_close(channel, reason="Closed by user request", anonymous=False, closer_id=user.id)
+
     async def _generate_html_transcript(self, channel: discord.TextChannel, owners_text: str, closer_display: str, reason: str, ticket_id: str) -> discord.File:
         html = f"""
         <!DOCTYPE html>
