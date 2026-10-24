@@ -542,11 +542,7 @@ class AdvancedMod(commands.Cog):
 
     @commands.hybrid_command(name="kick", description="[Class I+] Remove a member by mention or ID.")
     @commands.guild_only()
-    @app_commands.choices(appealable=[
-        app_commands.Choice(name="Allow Appeals", value=True),
-        app_commands.Choice(name="No Appeals", value=False)
-    ])
-    async def kick(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, appealable: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
+    async def kick(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, allow_appeals: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
         if not isinstance(target, discord.Member):
             return await ctx.send("❌ Target user must currently be present in the server to be kicked.", ephemeral=True)
@@ -560,15 +556,15 @@ class AdvancedMod(commands.Cog):
         if await self._has_level(ctx, 2):
             await ctx.send(f"👢 Removed {target.mention} from the server.")
             desc = f"**Reason:** {reason}"
-            if not appealable:
+            if not allow_appeals:
                 desc += "\n*This punishment is marked unappealable.*"
             embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=desc, color=discord.Color.red())
             await self._dm_user(target, embed, tag_user=True)
             await target.kick(reason=reason)
-            await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data, appealable=appealable)
+            await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data, appealable=allow_appeals)
         else:
             await ctx.send(f"⏳ Verification request for kick sent to Class II+ moderators.")
-            await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2, appealable=appealable)
+            await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2, appealable=allow_appeals)
 
     @commands.hybrid_command(name="ban", description="[Class II+] Ban or temporarily ban a user with suggested or custom durations.")
     @commands.guild_only()
@@ -579,11 +575,8 @@ class AdvancedMod(commands.Cog):
         app_commands.Choice(name="14 Days", value="14d"),
         app_commands.Choice(name="30 Days", value="30d"),
         app_commands.Choice(name="Permanent", value="permanent"),
-    ], appealable=[
-        app_commands.Choice(name="Allow Appeals", value=True),
-        app_commands.Choice(name="No Appeals", value=False)
     ])
-    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, duration: str = "permanent", appealable: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
+    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, duration: str = "permanent", allow_appeals: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.", ephemeral=True)
         allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
         if not allowed: return await ctx.send(error_msg, ephemeral=True)
@@ -594,11 +587,11 @@ class AdvancedMod(commands.Cog):
         seconds = self._parse_duration(duration)
 
         if await self._has_level(ctx, 3):
-            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=appealable, temp_duration=seconds, ctx=ctx)
+            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=allow_appeals, temp_duration=seconds, ctx=ctx)
         else:
             req_type = f"tempban ({duration})" if seconds else "permban"
             await ctx.send(f"⏳ Verification request for ban sent to Class III+ moderators.")
-            await self.create_request(ctx, req_type, target, reason, proof_data, ping_level=3, extra_data={"duration": seconds, "duration_str": duration}, appealable=appealable)
+            await self.create_request(ctx, req_type, target, reason, proof_data, ping_level=3, extra_data={"duration": seconds, "duration_str": duration}, appealable=allow_appeals)
 
     @commands.hybrid_command(name="strictban", description="[Manager+] Strict ban user by mention or ID.")
     @commands.guild_only()
