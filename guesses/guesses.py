@@ -41,16 +41,16 @@ class ManagerApprovalView(discord.ui.View):
 
     @discord.ui.button(label="Allow", style=discord.ButtonStyle.success)
     async def allow(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_all()
         await interaction.response.send_message("You have approved the guessing session.")
+        await self.disable_all()
         await self.cog._open_guessing_channel(self.interaction.guild, self.channel, self.answer, self.auto_mark, self.reg_cd, self.win_cd)
         self.cog.pending_requests.discard(self.interaction.guild.id)
         self.stop()
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger)
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_all()
         await interaction.response.send_message("You have denied the guessing session.")
+        await self.disable_all()
         try:
             await self.interaction.user.send("Your request to open the guessing channel was **denied** by a manager.")
         except discord.Forbidden:
