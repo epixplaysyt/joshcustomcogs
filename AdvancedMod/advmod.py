@@ -1,10 +1,67 @@
 import discord
 from redbot.core import commands, Config, modlog
 from discord.ext import tasks
+from discord import app_commands
 import datetime
 import time
 import uuid
 import typing
+import re
+
+DISCORD_MSG_LINK_REGEX = re.compile(
+    r"https?://(?:canary\.|ptb\.)?discord\.com/channels/(\d+)/(\d+)/(\d+)"
+)
+
+def format_proof_display(proof: str) -> str:
+    if not proof or proof == "None Provided":
+        return "None Provided"
+    
+    match = DISCORD_MSG_LINK_REGEX.search(proof)
+    if match:
+        guild_id, channel_id, message_id = match.groups()
+        return f"[Message Link](https://discord.com/channels/{guild_id}/{channel_id}/{message_id}) (<#{channel_id}>)"
+    
+    return f"<{proof}>"
+
+class BanConflictView(discord.ui.View):
+    def __init__(self, cog, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], new_action_type: str, reason: str, proof: str, temp_duration: int = None, appealable: bool = True):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.target = target
+        self.moderator = moderator
+        self.new_action_type = new_action_type
+        self.reason = reason
+        self.proof = proof
+        self.temp_duration = temp_duration
+        self.appealable = appealable
+
+    @discord.ui.button(label="Confirm & Override Ban", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.moderator.id:
+            return await interaction.response.send_message("❌ You are not authorized to confirm this action.", ephemeral=True)
+            
+        await interaction.response.defer()
+        
+        async with self.cog.config.guild(interaction.guild).pending_appeals() as appeals:
+            self.cog.config.guild(interaction.guild).pending_appeals.set([a for a in appeals if a["user_id"] != self.target.id])
+
+        if self.new_action_type == "tempban":
+            await self.cog._execute_ban_action(interaction.guild, self.target, self.moderator, self.reason, self.proof, appealable=self.appealable, temp_duration=self.temp_duration, is_override=True)
+            await interaction.followup.send(f"✅ Adjusted ban for **{self.target}** to a Temporary Ban ({self.temp_duration} seconds).")
+        else:
+            await self.cog._execute_ban_action(interaction.guild, self.target, self.moderator, self.reason, self.proof, appealable=self.appealable, temp_duration=None, is_override=True)
+            await interaction.followup.send(f"✅ Adjusted ban for **{self.target}** to a Permanent Ban.")
+            
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.moderator.id:
+            return await interaction.response.send_message("❌ You are not authorized to perform this action.", ephemeral=True)
+            
+        await interaction.response.send_message("Action canceled. No changes made to the user's ban status.", ephemeral=True)
+        self.stop()
+
 
 class DynamicRequestView(discord.ui.View):
     def __init__(self, cog):
@@ -32,12 +89,9 @@ class DynamicRequestView(discord.ui.View):
         if "kick" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 2):
                 return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class II+ to approve a kick request.", ephemeral=True)
-        elif "tempban" in req_type:
+        elif "ban" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 3):
-                return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class III+ to approve a temporary ban request.", ephemeral=True)
-        elif "permban" in req_type:
-            if not await self.cog._has_level_member(guild, interaction.user, 3):
-                return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class III+ to approve a permanent ban request.", ephemeral=True)
+                return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class III+ to approve a ban request.", ephemeral=True)
         elif "review" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 5):
                 return await interaction.response.send_message("❌ Hierarchy Denied: Only Directors can approve this action.", ephemeral=True)
@@ -48,6 +102,7 @@ class DynamicRequestView(discord.ui.View):
         target = guild.get_member(target_id) or await self.cog.bot.fetch_user(target_id)
         reason = f"Request {req_id} approved by {interaction.user} | Original: {req['reason']}"
         proof = req["proof"]
+        appealable = req.get("appealable", True)
 
         if "kick" in req_type:
             if isinstance(target, discord.Member):
@@ -57,12 +112,10 @@ class DynamicRequestView(discord.ui.View):
                     await target.kick(reason=reason)
                 except discord.HTTPException:
                     pass
-            await self.cog.log_immediate_action(guild, "Kick", target, interaction.user, reason, proof)
-        elif "tempban" in req_type:
-            days = req.get("duration_days", 14)
-            await self.cog._process_ban(guild, target, interaction.user, reason, proof, appealable=True, temp_days=days)
+            await self.cog.log_immediate_action(guild, "Kick", target, interaction.user, reason, proof, appealable=appealable)
         elif "ban" in req_type:
-            await self.cog._process_ban(guild, target, interaction.user, reason, proof, appealable=True)
+            duration = req.get("duration", None)
+            await self.cog._process_ban(guild, target, interaction.user, reason, proof, appealable=appealable, temp_duration=duration)
 
         disabled_view = discord.ui.View(timeout=None)
         disabled_view.add_item(discord.ui.Button(label="Approved", style=discord.ButtonStyle.green, disabled=True))
@@ -72,12 +125,12 @@ class DynamicRequestView(discord.ui.View):
         log_embed.add_field(name="Requested By", value=f"<@{req['author']}>", inline=True)
         log_embed.add_field(name="Approved By", value=interaction.user.mention, inline=True)
         log_embed.add_field(name="Reason", value=reason, inline=False)
-        if "duration_days" in req:
-            log_embed.add_field(name="Duration", value=f"{req['duration_days']} Days", inline=True)
+        log_embed.add_field(name="Appealable", value="Yes" if appealable else "No", inline=True)
+        if "duration_str" in req:
+            log_embed.add_field(name="Duration", value=req["duration_str"], inline=True)
             
         if proof and proof != "None Provided":
-            log_embed.set_image(url=proof)
-            log_embed.add_field(name="Proof Link", value=proof, inline=False)
+            log_embed.add_field(name="Proof / Evidence", value=format_proof_display(proof), inline=False)
 
         await interaction.message.edit(content=None, embed=log_embed, view=disabled_view)
 
@@ -201,6 +254,27 @@ class AdvancedMod(commands.Cog):
             return attachment.url
         return proof_link if proof_link else "None Provided"
 
+    def _parse_duration(self, duration_str: str) -> typing.Optional[int]:
+        if not duration_str:
+            return None
+        duration_str = duration_str.lower().strip()
+        if duration_str in ["permanent", "perm", "infinite", "none", "0"]:
+            return None
+        
+        match = re.match(r"^(\d+)([dhms])$", duration_str)
+        if match:
+            value, unit = int(match.group(1)), match.group(2)
+            if unit == "s": return value
+            if unit == "m": return value * 60
+            if unit == "h": return value * 3600
+            if unit == "d": return value * 86400
+            
+        try:
+            val = int(duration_str)
+            return val * 86400 
+        except ValueError:
+            return None
+
     async def _dm_user(self, target: typing.Union[discord.Member, discord.User], embed: discord.Embed, tag_user: bool = False):
         try:
             content = target.mention if tag_user else None
@@ -208,7 +282,7 @@ class AdvancedMod(commands.Cog):
         except discord.Forbidden:
             pass
 
-    async def log_immediate_action(self, guild: discord.Guild, action: str, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, duration_minutes: int = None, duration_days: int = None):
+    async def log_immediate_action(self, guild: discord.Guild, action: str, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, duration_minutes: int = None, duration_days: int = None, duration_str: str = None, appealable: bool = True):
         channel_id = await self.config.guild(guild).mod_channel()
         if channel_id:
             channel = guild.get_channel(channel_id)
@@ -219,9 +293,10 @@ class AdvancedMod(commands.Cog):
                 embed.add_field(name="Reason", value=reason, inline=False)
                 if duration_minutes: embed.add_field(name="Duration", value=f"{duration_minutes} Minutes", inline=True)
                 if duration_days: embed.add_field(name="Duration", value=f"{duration_days} Days", inline=True)
+                if duration_str: embed.add_field(name="Duration", value=duration_str, inline=True)
+                embed.add_field(name="Appealable", value="Yes" if appealable else "No", inline=True)
                 if proof and proof != "None Provided":
-                    embed.set_image(url=proof)
-                    embed.add_field(name="Proof Link", value=proof, inline=False)
+                    embed.add_field(name="Proof / Evidence", value=format_proof_display(proof), inline=False)
                 await channel.send(embed=embed)
 
         action_lower = action.lower()
@@ -236,7 +311,7 @@ class AdvancedMod(commands.Cog):
                 until_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=duration_minutes)
         elif "kick" in action_lower:
             modlog_type = "kick"
-        elif "tempban" in action_lower:
+        elif "tempban" in action_lower or "duration" in action_lower:
             modlog_type = "tempban"
             if duration_days:
                 until_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=duration_days)
@@ -252,13 +327,13 @@ class AdvancedMod(commands.Cog):
                     action_type=modlog_type,
                     user=target,
                     moderator=moderator,
-                    reason=f"{reason} | Evidence: {proof}",
+                    reason=f"{reason} | Evidence: {proof} | Appealable: {appealable}",
                     until=until_time
                 )
             except Exception:
                 pass
 
-    async def create_request(self, ctx: commands.Context, req_type: str, target: typing.Union[discord.Member, discord.User], reason: str, proof: str, ping_level: int, extra_data: dict = None):
+    async def create_request(self, ctx: commands.Context, req_type: str, target: typing.Union[discord.Member, discord.User], reason: str, proof: str, ping_level: int, extra_data: dict = None, appealable: bool = True):
         channel_id = await self.config.guild(ctx.guild).mod_channel()
         if not channel_id: return
         channel = ctx.guild.get_channel(channel_id)
@@ -278,13 +353,13 @@ class AdvancedMod(commands.Cog):
         embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
         embed.add_field(name="Requested By", value=ctx.author.mention, inline=False)
         embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Appealable", value="Yes" if appealable else "No", inline=True)
         if extra_data:
             for k, v in extra_data.items():
                 embed.add_field(name=k.replace("_", " ").title(), value=str(v), inline=True)
         
         if proof and proof != "None Provided":
-            embed.set_image(url=proof)
-            embed.add_field(name="Proof Link", value=proof, inline=False)
+            embed.add_field(name="Proof / Evidence", value=format_proof_display(proof), inline=False)
 
         msg = await channel.send(content=f"Attention required: {ping_mention}", embed=embed, view=DynamicRequestView(self))
         
@@ -294,7 +369,8 @@ class AdvancedMod(commands.Cog):
             "author": ctx.author.id,
             "reason": reason,
             "proof": proof,
-            "message_id": msg.id
+            "message_id": msg.id,
+            "appealable": appealable
         }
         if extra_data:
             base_payload.update(extra_data)
@@ -320,13 +396,13 @@ class AdvancedMod(commands.Cog):
             await target.timeout(time_delta, reason=reason)
             dm_embed = discord.Embed(title=f"Automated Timeout: {ctx.guild.name}", description=f"You have been timed out for {duration} minutes.\n**Reason:** {reason}", color=discord.Color.orange())
             await self._dm_user(target, dm_embed, tag_user=True)
-            await self.log_immediate_action(ctx.guild, f"Auto-Timeout", target, ctx.guild.me, reason, proof, duration_minutes=duration)
+            await self.log_immediate_action(ctx.guild, f"Auto-Timeout", target, ctx.guild.me, reason, proof, duration_minutes=duration, appealable=(duration >= 360))
 
         elif action == "kick" and isinstance(target, discord.Member):
             dm_embed = discord.Embed(title=f"Automated Kick: {ctx.guild.name}", description=f"You have been kicked.\n**Reason:** {reason}", color=discord.Color.red())
             await self._dm_user(target, dm_embed, tag_user=True)
             await target.kick(reason=reason)
-            await self.log_immediate_action(ctx.guild, "Auto-Kick", target, ctx.guild.me, reason, proof)
+            await self.log_immediate_action(ctx.guild, "Auto-Kick", target, ctx.guild.me, reason, proof, appealable=True)
 
         elif action == "ban":
             await self._process_ban(ctx.guild, target, ctx.guild.me, reason, proof, appealable=True, automated=True)
@@ -388,10 +464,10 @@ class AdvancedMod(commands.Cog):
 
         await ctx.send(f"⚠️ {target.mention} has been logged for warning #{total_warns}.")
 
-        embed = discord.Embed(title=f"Warning received in {ctx.guild.name}", description=f"**Reason:** {reason}\nTotal Server Infractions: {total_warns}", color=discord.Color.gold())
+        embed = discord.Embed(title=f"Warning received in {ctx.guild.name}", description=f"**Reason:** {reason}\nTotal Server Infractions: {total_warns}\n*Warnings do not have automatic appeals unless a complaint ticket is opened.*", color=discord.Color.gold())
         await self._dm_user(target, embed, tag_user=True)
         
-        await self.log_immediate_action(ctx.guild, f"Warn (#{total_warns})", target, ctx.author, reason, proof_data)
+        await self.log_immediate_action(ctx.guild, f"Warn (#{total_warns})", target, ctx.author, reason, proof_data, appealable=False)
         await self._process_warning_escalation(ctx, target)
 
     @commands.hybrid_command(name="warnings", description="[Class I+] View warning history by user mention or ID.")
@@ -411,7 +487,7 @@ class AdvancedMod(commands.Cog):
             timestamp = f"<t:{int(w['time'])}:F>"
             value = f"**Reason:** {w['reason']}\n**Moderator:** <@{w['mod']}>\n**Date:** {timestamp}"
             if w['proof'] != "None Provided":
-                value += f"\n**Proof Evidence:** [Click to View]({w['proof']})"
+                value += f"\n**Proof Evidence:** {format_proof_display(w['proof'])}"
             embed.add_field(name=f"Warning #{idx}", value=value, inline=False)
             
         await ctx.send(embed=embed)
@@ -430,14 +506,14 @@ class AdvancedMod(commands.Cog):
             if warning_number is None:
                 warns.clear()
                 await ctx.send(f"✅ Successfully wiped all warning infractions for {target.mention}.")
-                await self.log_immediate_action(ctx.guild, "Wipe Warnings", target, ctx.author, "All warning history wiped manually by supervisor.", "None Provided")
+                await self.log_immediate_action(ctx.guild, "Wipe Warnings", target, ctx.author, "All warning history wiped manually by supervisor.", "None Provided", appealable=False)
             else:
                 if warning_number < 1 or warning_number > len(warns):
                     return await ctx.send(f"❌ Invalid index selection. Choose a position between 1 and {len(warns)}.", ephemeral=True)
                     
                 removed = warns.pop(warning_number - 1)
                 await ctx.send(f"✅ Successfully removed Warning `#{warning_number}` from {target.mention}.")
-                await self.log_immediate_action(ctx.guild, f"Remove Warn #{warning_number}", target, ctx.author, f"Warning removed. Original Reason: {removed['reason']}", "None Provided")
+                await self.log_immediate_action(ctx.guild, f"Remove Warn #{warning_number}", target, ctx.author, f"Warning removed. Original Reason: {removed['reason']}", "None Provided", appealable=False)
 
     @commands.hybrid_command(name="timeout", description="[Class I+] Timeout (mute) a user temporarily to stop them from interacting with the community.")
     @commands.guild_only()
@@ -455,13 +531,22 @@ class AdvancedMod(commands.Cog):
         await ctx.send(f"🔇 Timed out {target.mention} for {minutes}m.")
         
         await target.timeout(datetime.timedelta(minutes=minutes), reason=reason)
-        embed = discord.Embed(title=f"Timed Out in {ctx.guild.name}", description=f"Duration: {minutes} minutes\n**Reason:** {reason}", color=discord.Color.orange())
+        appealable = minutes >= 360
+        appeal_desc = f"Duration: {minutes} minutes\n**Reason:** {reason}"
+        if not appealable:
+            appeal_desc += "\n*Timeouts under 6 hours do not have appeals unless a complaint ticket is opened.*"
+            
+        embed = discord.Embed(title=f"Timed Out in {ctx.guild.name}", description=appeal_desc, color=discord.Color.orange())
         await self._dm_user(target, embed, tag_user=True)
-        await self.log_immediate_action(ctx.guild, "Timeout", target, ctx.author, reason, proof_data, duration_minutes=minutes)
+        await self.log_immediate_action(ctx.guild, "Timeout", target, ctx.author, reason, proof_data, duration_minutes=minutes, appealable=appealable)
 
     @commands.hybrid_command(name="kick", description="[Class I+] Remove a member by mention or ID.")
     @commands.guild_only()
-    async def kick(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+    @app_commands.choices(appealable=[
+        app_commands.Choice(name="Allow Appeals", value=True),
+        app_commands.Choice(name="No Appeals", value=False)
+    ])
+    async def kick(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, appealable: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
         if not isinstance(target, discord.Member):
             return await ctx.send("❌ Target user must currently be present in the server to be kicked.", ephemeral=True)
@@ -474,36 +559,31 @@ class AdvancedMod(commands.Cog):
 
         if await self._has_level(ctx, 2):
             await ctx.send(f"👢 Removed {target.mention} from the server.")
-            embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
+            desc = f"**Reason:** {reason}"
+            if not appealable:
+                desc += "\n*This punishment is marked unappealable.*"
+            embed = discord.Embed(title=f"Kicked from {ctx.guild.name}", description=desc, color=discord.Color.red())
             await self._dm_user(target, embed, tag_user=True)
             await target.kick(reason=reason)
-            await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data)
+            await self.log_immediate_action(ctx.guild, "Kick", target, ctx.author, reason, proof_data, appealable=appealable)
         else:
             await ctx.send(f"⏳ Verification request for kick sent to Class II+ moderators.")
-            await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2)
+            await self.create_request(ctx, "kick", target, reason, proof_data, ping_level=2, appealable=appealable)
 
-    @commands.hybrid_command(name="tempban", description="[Class I+] Tempban a user by mention or ID.")
+    @commands.hybrid_command(name="ban", description="[Class II+] Ban or temporarily ban a user with suggested or custom durations.")
     @commands.guild_only()
-    async def tempban(self, ctx, target: typing.Union[discord.Member, discord.User], duration_days: int, reason: str, proof_link: str = None, attachment: discord.Attachment = None):
-        if not await self._has_level(ctx, 1): return await ctx.send("Permission denied.", ephemeral=True)
-        allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
-        if not allowed: return await ctx.send(error_msg, ephemeral=True)
-        
-        if duration_days <= 0: return await ctx.send("❌ Ban duration must be at least 1 day.", ephemeral=True)
-        
-        proof_data = self._get_proof(proof_link, attachment)
-        if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
-
-        if await self._has_level(ctx, 3):
-            await ctx.send(f"⏳ Temporarily banned {target} for {duration_days} days.")
-            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True, temp_days=duration_days)
-        else:
-            await ctx.send(f"⏳ Verification request for temporary ban sent to Class III+ moderators.")
-            await self.create_request(ctx, "tempban", target, reason, proof_data, ping_level=3, extra_data={"duration_days": duration_days})
-
-    @commands.hybrid_command(name="ban", description="[Class II+] Ban a user by mention or ID.")
-    @commands.guild_only()
-    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, proof_link: str = None, attachment: discord.Attachment = None):
+    @app_commands.choices(duration=[
+        app_commands.Choice(name="1 Day", value="1d"),
+        app_commands.Choice(name="3 Days", value="3d"),
+        app_commands.Choice(name="7 Days", value="7d"),
+        app_commands.Choice(name="14 Days", value="14d"),
+        app_commands.Choice(name="30 Days", value="30d"),
+        app_commands.Choice(name="Permanent", value="permanent"),
+    ], appealable=[
+        app_commands.Choice(name="Allow Appeals", value=True),
+        app_commands.Choice(name="No Appeals", value=False)
+    ])
+    async def ban(self, ctx, target: typing.Union[discord.Member, discord.User], reason: str, duration: str = "permanent", appealable: bool = True, proof_link: str = None, attachment: discord.Attachment = None):
         if not await self._has_level(ctx, 2): return await ctx.send("Permission denied.", ephemeral=True)
         allowed, error_msg = await self._is_allowed_to_moderate(ctx, target)
         if not allowed: return await ctx.send(error_msg, ephemeral=True)
@@ -511,12 +591,14 @@ class AdvancedMod(commands.Cog):
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
+        seconds = self._parse_duration(duration)
+
         if await self._has_level(ctx, 3):
-            await ctx.send(f"🔨 Permanently banned {target}.")
-            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=True)
+            await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=appealable, temp_duration=seconds, ctx=ctx)
         else:
+            req_type = f"tempban ({duration})" if seconds else "permban"
             await ctx.send(f"⏳ Verification request for ban sent to Class III+ moderators.")
-            await self.create_request(ctx, "permban (appealable)", target, reason, proof_data, ping_level=3)
+            await self.create_request(ctx, req_type, target, reason, proof_data, ping_level=3, extra_data={"duration": seconds, "duration_str": duration}, appealable=appealable)
 
     @commands.hybrid_command(name="strictban", description="[Manager+] Strict ban user by mention or ID.")
     @commands.guild_only()
@@ -530,26 +612,71 @@ class AdvancedMod(commands.Cog):
 
         await ctx.send(f"⛔ Executed strict ban on {target}. Forwarded context to Directors.")
         await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=False)
-        await self.create_request(ctx, "director review (strict ban)", target, reason, proof_data, ping_level=5)
+        await self.create_request(ctx, "director review (strict ban)", target, reason, proof_data, ping_level=5, appealable=False)
 
-    async def _process_ban(self, guild: discord.Guild, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, appealable: bool, temp_days: int = None, automated: bool = False):
+    async def _process_ban(self, guild: discord.Guild, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, appealable: bool, temp_duration: int = None, automated: bool = False, ctx: commands.Context = None):
+        try:
+            ban_entry = await guild.fetch_ban(target)
+        except discord.NotFound:
+            ban_entry = None
+
+        if ban_entry:
+            pending_appeals = await self.config.guild(guild).pending_appeals()
+            existing_appeal = next((a for a in pending_appeals if a["user_id"] == target.id), None)
+            
+            is_currently_temp = existing_appeal and existing_appeal.get("hold_seconds", 0) != 0
+            new_action = "tempban" if temp_duration else "permban"
+
+            if is_currently_temp and not temp_duration:
+                warning_msg = f"⚠️ **Warning:** {target} is currently **temporarily banned**. Applying a permanent ban will overwrite their temporary ban duration."
+            elif not is_currently_temp and temp_duration:
+                days_val = temp_duration // 86400 if temp_duration >= 86400 else f"{temp_duration}s"
+                warning_msg = f"⚠️ **Warning:** {target} is currently **permanently banned**. Applying a temporary ban will convert it into a {days_val} temporary ban."
+            else:
+                warning_msg = f"⚠️ **Warning:** {target} is already banned in this server. Do you want to update/override their existing ban entry?"
+
+            if ctx:
+                view = BanConflictView(self, target, moderator, new_action, reason, proof, temp_duration, appealable=appealable)
+                await ctx.send(warning_msg, view=view)
+                return
+            else:
+                async with self.config.guild(guild).pending_appeals() as appeals:
+                    self.config.guild(guild).pending_appeals.set([a for a in appeals if a["user_id"] != target.id])
+
+        await self._execute_ban_action(guild, target, moderator, reason, proof, appealable, temp_duration, automated)
+        if ctx and not ban_entry:
+            if temp_duration:
+                days_display = f"{temp_duration // 86400} days" if temp_duration >= 86400 else f"{temp_duration} seconds"
+                await ctx.send(f"⏳ Temporarily banned {target} for {days_display}.")
+            else:
+                await ctx.send(f"🔨 Permanently banned {target}.")
+
+    async def _execute_ban_action(self, guild: discord.Guild, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, appealable: bool, temp_duration: int = None, automated: bool = False, is_override: bool = False):
         desc = f"**Reason:** {reason}"
-        if temp_days: desc = f"**Duration:** {temp_days} Days\n" + desc
+        days_val = None
+        if temp_duration:
+            days_val = max(1, temp_duration // 86400)
+            desc = f"**Duration:** {temp_duration} Seconds\n" + desc
+            
         embed = discord.Embed(title=f"Banned from {guild.name}", description=desc, color=discord.Color.dark_red())
         
         if appealable:
-            hold_time = temp_days if temp_days else 14
+            hold_time = days_val if days_val else 14
             embed.add_field(name="Appeals", value=f"This restriction is appealable. You will receive an access form via DM in {hold_time} days.")
             async with self.config.guild(guild).pending_appeals() as appeals_list:
-                appeals_list.append({"user_id": target.id, "timestamp": time.time(), "hold_days": hold_time})
+                appeals_list.append({"user_id": target.id, "timestamp": time.time(), "hold_days": hold_time, "hold_seconds": temp_duration if temp_duration else 0})
         else:
             embed.add_field(name="Appeals", value="This execution type is strict and unappealable.")
 
         await self._dm_user(target, embed, tag_user=True)
-        await guild.ban(target, reason=reason)
+        try:
+            await guild.ban(target, reason=reason)
+        except discord.HTTPException:
+            pass
         
-        log_type = "Auto-Ban" if automated else (f"Tempban" if temp_days else ("Ban" if appealable else "Strict Ban"))
-        await self.log_immediate_action(guild, log_type, target, moderator, reason, proof, duration_days=temp_days)
+        log_prefix = "Override: " if is_override else ""
+        log_type = f"{log_prefix}Auto-Ban" if automated else (f"{log_prefix}Tempban" if temp_duration else (f"{log_prefix}Ban" if appealable else f"{log_prefix}Strict Ban"))
+        await self.log_immediate_action(guild, log_type, target, moderator, reason, proof, duration_days=days_val, appealable=appealable)
 
     @tasks.loop(hours=24)
     async def appeal_notifier(self):
