@@ -195,7 +195,7 @@ class TicketConfirmationView(discord.ui.View):
                 await interaction.message.edit(content=f"✅ **Ticket {ticket_id} opened successfully!**", view=None)
         return callback
 
-    async def cancel_callback(self, interaction: discord.Interaction):
+    async def cancel_button(self, interaction: discord.Interaction):
         self.stop()
         await interaction.response.edit_message(content="❌ Ticket creation cancelled.", view=None)
 
