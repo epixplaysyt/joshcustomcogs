@@ -1334,18 +1334,31 @@ class Modmail(commands.Cog):
     @ticket_group.command(name="open", description="Open a ticket for a specific user.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_open(self, interaction: discord.Interaction, user: discord.User):
-        active_channel_id = await self.config.user(user).active_channel_id()
-        if active_channel_id and interaction.guild.get_channel(active_channel_id):
-            return await interaction.response.send_message(f"❌ This user already has an open ticket: <#{active_channel_id}>", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
-        channel = await self._create_ticket(interaction.guild, user, "general", "")
-        await interaction.response.send_message(f"✅ Ticket channel created in {channel.mention}", ephemeral=True)
+        default_guild_id = await self.config.default_guild_id()
+        guild = self.bot.get_guild(default_guild_id) if default_guild_id else interaction.guild
+        if not guild:
+            guild = interaction.guild
+
+        active_channel_id = await self.config.user(user).active_channel_id()
+        if active_channel_id and guild.get_channel(active_channel_id):
+            return await interaction.followup.send(f"❌ This user already has an open ticket: <#{active_channel_id}>", ephemeral=True)
+
+        channel = await self._create_ticket(guild, user, "general", "")
+        await interaction.followup.send(f"✅ Ticket channel created in {channel.mention}", ephemeral=True)
 
     @ticket_group.command(name="group", description="Create a group ticket with multiple users.")
     @app_commands.describe(user_ids="Space-separated list of user IDs")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_group_cmd(self, interaction: discord.Interaction, user_ids: str):
         await interaction.response.defer(ephemeral=True)
+
+        default_guild_id = await self.config.default_guild_id()
+        guild = self.bot.get_guild(default_guild_id) if default_guild_id else interaction.guild
+        if not guild:
+            guild = interaction.guild
+
         ids = user_ids.split()
         users = []
         for i in ids:
@@ -1360,10 +1373,10 @@ class Modmail(commands.Cog):
             
         for u in users:
             active_id = await self.config.user(u).active_channel_id()
-            if active_id and interaction.guild.get_channel(active_id):
+            if active_id and guild.get_channel(active_id):
                 return await interaction.followup.send(f"❌ User {u.name} already has an open ticket.")
                 
-        channel = await self._create_group_ticket(interaction.guild, users)
+        channel = await self._create_group_ticket(guild, users)
         await interaction.followup.send(f"✅ Group ticket created: {channel.mention}")
 
     @ticket_group.command(name="loadmessages", description="Load recent messages from the user's DM history into this ticket channel.")
@@ -1797,7 +1810,7 @@ class Modmail(commands.Cog):
                 del deps[name]
                 await ctx.send(f"✅ Department **{name.title()}** has been removed.")
             else:
-                await ctx.send(f"❌ Department **{name.title()}** does not exist.")
+                await ctx.send(f"❌ Department `{name.title()}` does not exist.")
 
     @modmailset.command(name="snippet")
     async def modmailset_snippet(self, ctx, name: str, is_anonymous: bool, *, text: str):
