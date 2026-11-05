@@ -16,7 +16,7 @@ class SetWordOverrideView(discord.ui.View):
     @discord.ui.button(label="Set Anyway", style=discord.ButtonStyle.danger)
     async def confirm_override(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+            await interaction.response.send_message("You cannot use this button.", ephemeral=True)
             return
         await self.cog.apply_set_word(self.ctx, self.word, self.validate, interaction=interaction)
         self.stop()
@@ -24,9 +24,9 @@ class SetWordOverrideView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message("❌ You cannot use this button.", ephemeral=True)
+            await interaction.response.send_message("You cannot use this button.", ephemeral=True)
             return
-        await interaction.response.edit_message(content="❌ Action cancelled.", view=None)
+        await interaction.response.edit_message(content="Action cancelled.", view=None)
         self.stop()
 
 class WordleGuessModal(discord.ui.Modal, title="Submit Your Wordle Guess"):
@@ -48,7 +48,7 @@ class WordleGuessModal(discord.ui.Modal, title="Submit Your Wordle Guess"):
         guess = self.guess_input.value.strip().upper()
         if not re.match(r"^[A-Z]{5}$", guess):
             await interaction.response.send_message(
-                "❌ Guess must contain only 5 letters (A-Z).", ephemeral=True
+                "Guess must contain only 5 letters (A-Z).", ephemeral=True
             )
             return
         
@@ -73,7 +73,7 @@ class WordleDMView(discord.ui.View):
 
     async def on_guess_click(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ This is not your game session.", ephemeral=True)
+            await interaction.response.send_message("This is not your game session.", ephemeral=True)
             return
 
         modal = WordleGuessModal(self.cog, self.user_id)
@@ -88,14 +88,17 @@ class TransportWordle(commands.Cog):
             "results_channel_id": None,
             "secret_word": "METRO",
             "word_date": "",
-            "validate_word": True
+            "validate_word": True,
+            "last_processed_date": ""
         }
         default_user = {
             "date": "",
             "guesses": [],
             "results": [],
             "completed": False,
-            "won": False
+            "won": False,
+            "start_time": None,
+            "finish_time": None
         }
         
         self.config.register_guild(**default_guild)
@@ -116,39 +119,85 @@ class TransportWordle(commands.Cog):
     @tasks.loop(minutes=30)
     async def daily_check(self):
         today = self.get_today_string()
-        all_users = await self.config.all_users()
-        
-        for user_id_str, user_data in all_users.items():
-            user_date = user_data.get("date", "")
-            completed = user_data.get("completed", False)
-            guesses = user_data.get("guesses", [])
+        for guild in self.bot.guilds:
+            last_proc = await self.config.guild(guild).last_processed_date()
+            if not last_proc:
+                await self.config.guild(guild).last_processed_date.set(today)
+                continue
             
-            if user_date and user_date != today and not completed and len(guesses) > 0:
-                user_id = int(user_id_str)
-                user = self.bot.get_user(user_id)
-                if user:
-                    for guild in self.bot.guilds:
-                        if guild.get_member(user_id):
-                            results_channel_id = await self.config.guild(guild).results_channel_id()
-                            if results_channel_id:
-                                results_channel = guild.get_channel(results_channel_id)
-                                if results_channel:
-                                    results_text = "\n".join(user_data["results"])
-                                    public_embed = discord.Embed(
-                                        title=f"🚆 Transport Wordle Result (Unfinished) - {user.display_name}",
-                                        description=f"**Score:** X/6\n\n{results_text}",
-                                        color=discord.Color.dark_grey()
-                                    )
-                                    public_embed.set_footer(text=f"Date: {user_date}")
-                                    await results_channel.send(embed=public_embed)
-                            break
+            if last_proc != today:
+                yesterday = last_proc
+                results_channel_id = await self.config.guild(guild).results_channel_id()
+                results_channel = guild.get_channel(results_channel_id) if results_channel_id else None
                 
-                await self.config.user_from_id(user_id).set({
+                all_users = await self.config.all_users()
+                winners = []
+                unfinished = []
+                
+                for user_id_str, user_data in all_users.items():
+                    if user_data.get("date") == yesterday:
+                        user_id = int(user_id_str)
+                        if user_data.get("completed") and user_data.get("won"):
+                            start = user_data.get("start_time")
+                            finish = user_data.get("finish_time")
+                            duration = (finish - start) if (start and finish) else 999999
+                            guesses_count = len(user_data.get("guesses", []))
+                            winners.append({
+                                "user_id": user_id,
+                                "guesses": guesses_count,
+                                "duration": duration,
+                                "results": user_data.get("results", [])
+                            })
+                        elif not user_data.get("completed") and len(user_data.get("guesses", [])) > 0:
+                            unfinished.append({
+                                "user_id": user_id,
+                                "results": user_data.get("results", [])
+                            })
+                
+                if results_channel:
+                    if winners:
+                        winners.sort(key=lambda x: (x["guesses"], x["duration"]))
+                        lb_desc = ""
+                        for idx, w in enumerate(winners, 1):
+                            member = guild.get_member(w["user_id"])
+                            name = member.display_name if member else f"User {w['user_id']}"
+                            mins = int(w["duration"] // 60)
+                            secs = int(w["duration"] % 60)
+                            time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+                            lb_desc += f"{idx}. **{name}** - {w['guesses']}/6 guesses ({time_str})\n"
+                        
+                        lb_embed = discord.Embed(
+                            title=f"Transport Wordle Leaderboard - {yesterday}",
+                            description=lb_desc,
+                            color=discord.Color.gold()
+                        )
+                        await results_channel.send(embed=lb_embed)
+                    
+                    for unfin in unfinished:
+                        member = guild.get_member(unfin["user_id"])
+                        name = member.display_name if member else f"User {unfin['user_id']}"
+                        results_text = "\n".join(unfin["results"])
+                        public_embed = discord.Embed(
+                            title=f"Transport Wordle Result - Unfinished - {name}",
+                            description=f"Score: X/6\n\n{results_text}",
+                            color=discord.Color.dark_grey()
+                        )
+                        public_embed.set_footer(text=f"Date: {yesterday}")
+                        await results_channel.send(embed=public_embed)
+                
+                await self.config.guild(guild).last_processed_date.set(today)
+
+        all_users = await self.config.all_users()
+        for user_id_str, user_data in all_users.items():
+            if user_data.get("date") and user_data.get("date") != today:
+                await self.config.user_from_id(int(user_id_str)).set({
                     "date": today,
                     "guesses": [],
                     "results": [],
                     "completed": False,
-                    "won": False
+                    "won": False,
+                    "start_time": None,
+                    "finish_time": None
                 })
 
     @daily_check.before_loop
@@ -197,11 +246,11 @@ class TransportWordle(commands.Cog):
             color = discord.Color.green() if won else discord.Color.red()
 
         embed = discord.Embed(
-            title="🚆 Transport Wordle",
+            title="Transport Wordle",
             description=description,
             color=color
         )
-        embed.set_footer(text=f"Attempt {len(guesses)}/6 • Resets Daily at Midnight UTC")
+        embed.set_footer(text=f"Attempt {len(guesses)}/6 - Resets Daily at Midnight UTC")
         return embed
 
     async def apply_set_word(self, ctx, word, validate, interaction=None):
@@ -210,21 +259,28 @@ class TransportWordle(commands.Cog):
         await self.config.guild(ctx.guild).word_date.set(today)
         await self.config.guild(ctx.guild).validate_word.set(validate)
 
-        msg = f"✅ Today's transport Wordle word has been set to **{word}** (Dictionary Validation: {'Enabled' if validate else 'Disabled'})."
+        msg = f"Today's transport Wordle word has been set to **{word}** (Dictionary Validation: {'Enabled' if validate else 'Disabled'})."
         if interaction:
             await interaction.response.edit_message(content=msg, view=None)
         else:
             await ctx.send(msg, ephemeral=True)
+
+        results_channel_id = await self.config.guild(ctx.guild).results_channel_id()
+        if results_channel_id:
+            results_channel = ctx.guild.get_channel(results_channel_id)
+            if results_channel:
+                await results_channel.send("A new transport Wordle has been set by staff for today! Use `/wordle` to play.")
 
     @commands.hybrid_command(name="setwordle")
     @commands.admin_or_permissions(manage_guild=True)
     async def setwordle(self, ctx: commands.Context, word: str, validate: bool = True):
         word = word.strip().upper()
         if len(word) != 5 or not word.isalpha():
+            msg = "Word must be exactly 5 alphabetic letters (e.g. `RAILS`, `DEPOT`)."
             if ctx.interaction:
-                await ctx.interaction.response.send_message("❌ Word must be exactly 5 alphabetic letters (e.g. `RAILS`, `DEPOT`).", ephemeral=True)
+                await ctx.interaction.response.send_message(msg, ephemeral=True)
             else:
-                await ctx.send("❌ Word must be exactly 5 alphabetic letters (e.g. `RAILS`, `DEPOT`).", ephemeral=True)
+                await ctx.send(msg, ephemeral=True)
             return
 
         today = self.get_today_string()
@@ -233,7 +289,7 @@ class TransportWordle(commands.Cog):
 
         if current_date == today and current_word:
             view = SetWordOverrideView(self, ctx, word, validate)
-            content = f"⚠️ A word (**{current_word}**) is already active for today! Do you want to overwrite it?"
+            content = f"A word (**{current_word}**) is already active for today! Do you want to overwrite it?"
             if ctx.interaction:
                 await ctx.interaction.response.send_message(content, view=view, ephemeral=True)
             else:
@@ -243,7 +299,7 @@ class TransportWordle(commands.Cog):
         if validate:
             exists = await self.check_word_exists(word)
             if not exists:
-                msg = f"❌ **{word}** was not found in the dictionary API. Set validation to false if this is an intentional custom word."
+                msg = f"**{word}** was not found in the dictionary API. Set validation to false if this is an intentional custom word."
                 if ctx.interaction:
                     await ctx.interaction.response.send_message(msg, ephemeral=True)
                 else:
@@ -256,7 +312,7 @@ class TransportWordle(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def setwordlechannel(self, ctx: commands.Context, channel: discord.TextChannel):
         await self.config.guild(ctx.guild).results_channel_id.set(channel.id)
-        await ctx.send(f"✅ Wordle results channel set to {channel.mention}.", ephemeral=True)
+        await ctx.send(f"Wordle results channel set to {channel.mention}.", ephemeral=True)
 
     @commands.hybrid_command(name="wordle")
     async def wordle(self, ctx: commands.Context):
@@ -264,14 +320,21 @@ class TransportWordle(commands.Cog):
         user_config = self.config.user(ctx.author)
         user_data = await user_config.all()
 
+        current_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+
         if user_data["date"] != today:
             user_data = {
                 "date": today,
                 "guesses": [],
                 "results": [],
                 "completed": False,
-                "won": False
+                "won": False,
+                "start_time": current_time,
+                "finish_time": None
             }
+            await user_config.set(user_data)
+        elif not user_data.get("start_time"):
+            user_data["start_time"] = current_time
             await user_config.set(user_data)
 
         embed = self.build_embed(user_data)
@@ -285,11 +348,11 @@ class TransportWordle(commands.Cog):
                 view=view
             )
             if ctx.interaction:
-                await ctx.interaction.response.send_message("📬 I have sent your Wordle game to your DMs!", ephemeral=True)
+                await ctx.interaction.response.send_message("I have sent your Wordle game to your DMs!", ephemeral=True)
             else:
-                await ctx.send("📬 I have sent your Wordle game to your DMs!")
+                await ctx.send("I have sent your Wordle game to your DMs!")
         except discord.Forbidden:
-            error_msg = "❌ Could not send you a DM. Please check your privacy settings to allow DMs from server members."
+            error_msg = "Could not send you a DM. Please check your privacy settings to allow DMs from server members."
             if ctx.interaction:
                 await ctx.interaction.response.send_message(error_msg, ephemeral=True)
             else:
@@ -311,35 +374,41 @@ class TransportWordle(commands.Cog):
         guild_id = interaction.guild_id
         secret_word = "METRO"
         validate_word = True
+        guild = None
         if guild_id:
             guild = self.bot.get_guild(guild_id)
             if guild:
                 secret_word = await self.config.guild(guild).secret_word()
                 validate_word = await self.config.guild(guild).validate_word()
         else:
-            for guild in self.bot.guilds:
-                if guild.get_member(user_id):
-                    secret_word = await self.config.guild(guild).secret_word()
-                    validate_word = await self.config.guild(guild).validate_word()
-                    guild_id = guild.id
+            for g in self.bot.guilds:
+                if g.get_member(user_id):
+                    secret_word = await self.config.guild(g).secret_word()
+                    validate_word = await self.config.guild(g).validate_word()
+                    guild_id = g.id
+                    guild = g
                     break
 
         if validate_word:
             exists = await self.check_word_exists(guess)
             if not exists:
-                await interaction.followup.send(f"❌ **{guess}** is not a recognized word in the dictionary.", ephemeral=True)
+                await interaction.followup.send(f"**{guess}** is not a recognized word in the dictionary.", ephemeral=True)
                 return
 
         feedback = self.evaluate_guess(guess, secret_word)
         user_data["guesses"].append(guess)
         user_data["results"].append(feedback)
 
+        current_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+
         if guess == secret_word:
             user_data["completed"] = True
             user_data["won"] = True
+            user_data["finish_time"] = current_time
         elif len(user_data["guesses"]) >= 6:
             user_data["completed"] = True
             user_data["won"] = False
+            user_data["finish_time"] = current_time
 
         await user_config.set(user_data)
 
@@ -349,20 +418,20 @@ class TransportWordle(commands.Cog):
         await interaction.message.edit(embeds=[embed], view=view)
         await interaction.followup.send(f"Guess registered: **{guess}**", ephemeral=True)
 
-        if user_data["completed"] and guild_id:
-            guild = self.bot.get_guild(guild_id)
-            if guild:
-                results_channel_id = await self.config.guild(guild).results_channel_id()
-                if results_channel_id:
-                    results_channel = guild.get_channel(results_channel_id)
-                    if results_channel:
-                        score_str = f"{len(user_data['guesses'])}/6" if user_data["won"] else "X/6"
-                        results_text = "\n".join(user_data["results"])
-                        
-                        public_embed = discord.Embed(
-                            title=f"🚆 Transport Wordle Result - {user.display_name}",
-                            description=f"**Score:** {score_str}\n\n{results_text}",
-                            color=discord.Color.green() if user_data["won"] else discord.Color.red()
-                        )
-                        public_embed.set_footer(text=f"Date: {today}")
-                        await results_channel.send(embed=public_embed)
+        if user_data["completed"] and guild:
+            results_channel_id = await self.config.guild(guild).results_channel_id()
+            if results_channel_id:
+                results_channel = guild.get_channel(results_channel_id)
+                if results_channel:
+                    member = guild.get_member(user_id)
+                    display_name = member.display_name if member else user.name
+                    score_str = f"{len(user_data['guesses'])}/6" if user_data["won"] else "X/6"
+                    results_text = "\n".join(user_data["results"])
+                    
+                    public_embed = discord.Embed(
+                        title=f"Transport Wordle Result - {display_name}",
+                        description=f"Score: {score_str}\n\n{results_text}",
+                        color=discord.Color.green() if user_data["won"] else discord.Color.red()
+                    )
+                    public_embed.set_footer(text=f"Date: {today}")
+                    await results_channel.send(embed=public_embed)
