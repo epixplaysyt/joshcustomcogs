@@ -135,7 +135,7 @@ class TransportWordle(commands.Cog):
                                 if results_channel:
                                     results_text = "\n".join(user_data["results"])
                                     public_embed = discord.Embed(
-                                        title=f"🚆 Transport Wordle Result (Unfinished) — {user.display_name}",
+                                        title=f"🚆 Transport Wordle Result (Unfinished) - {user.display_name}",
                                         description=f"**Score:** X/6\n\n{results_text}",
                                         color=discord.Color.dark_grey()
                                     )
@@ -360,7 +360,7 @@ class TransportWordle(commands.Cog):
                         results_text = "\n".join(user_data["results"])
                         
                         public_embed = discord.Embed(
-                            title=f"🚆 Transport Wordle Result — {user.display_name}",
+                            title=f"🚆 Transport Wordle Result - {user.display_name}",
                             description=f"**Score:** {score_str}\n\n{results_text}",
                             color=discord.Color.green() if user_data["won"] else discord.Color.red()
                         )
