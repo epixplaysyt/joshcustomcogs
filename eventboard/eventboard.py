@@ -187,7 +187,9 @@ class EventBoard(commands.Cog):
             "participate in upcoming activities."
         )
         embed.add_field(name="What will you find here?", value=info_field_value, inline=False)
-        embed.add_field(name="🗓️ Upcoming Schedule", value=events_text, inline=False)
+        schedule = events_text[:4000]
+        for index in range(0, len(schedule), 1024):
+            embed.add_field(name="🗓️ Upcoming Schedule" if index == 0 else "Schedule (continued)", value=schedule[index:index + 1024], inline=False)
         
         avatar_url = guild.icon.url if guild.icon else None
         embed.set_footer(
