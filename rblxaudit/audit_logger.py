@@ -152,37 +152,42 @@ class AuditLogger(commands.Cog):
                 url = f"https://apis.roblox.com/legacy-groups/v1/groups/{group_id}/audit-log"
                 headers = {"x-api-key": api_key}
                 
-                async with self.session.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        continue
-                    data = await resp.json()
-                    logs = data.get("data", [])
-                    
-                if not logs:
-                    continue
-
                 last_log_time = parse_isodate(last_log_time_str) if last_log_time_str else None
                 new_logs = []
-                for log in logs:
-                    created_at = parse_isodate(log.get("created"))
-                    if last_log_time and created_at and created_at <= last_log_time:
+                cursor = None
+                while True:
+                    params = {"limit": 100, "sortOrder": "Desc"}
+                    if cursor:
+                        params["cursor"] = cursor
+                    async with self.session.get(url, headers=headers, params=params) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                    reached_previous = False
+                    for item in data.get("data", []):
+                        created_at = parse_isodate(item.get("created"))
+                        if last_log_time and created_at and created_at <= last_log_time:
+                            reached_previous = True
+                            break
+                        new_logs.append(item)
+                    next_cursor = data.get("nextPageCursor")
+                    if reached_previous or not next_cursor or next_cursor == cursor:
                         break
-                    new_logs.append(log)
+                    cursor = next_cursor
 
                 if not new_logs:
                     continue
                     
                 newest_time = new_logs[0].get("created")
-                await config.last_log_time.set(newest_time)
                 
                 for log in reversed(new_logs):
                     await self.process_roblox_log(channel, log, group_id, max_safe_rank)
+                await config.last_log_time.set(newest_time)
 
             except Exception as e:
                 if channel:
                     try:
                         await channel.send(f"⚠️ **[RobloxAuditLogger] Loop Error:** `{str(e)}`")
-                    except discord.Forbidden:
+                    except discord.HTTPException:
                         pass
 
     async def process_roblox_log(self, channel, log, group_id, max_safe_rank):
@@ -246,16 +251,9 @@ class AuditLogger(commands.Cog):
                 embed.add_field(name="Action Type", value=f"`{action_type}`", inline=True)
                 embed.add_field(name="Details", value=danger_reason, inline=False)
                 
-                try:
-                    await channel.send(embed=embed)
-                except discord.Forbidden:
-                    pass
-        except Exception as e:
-            if channel:
-                try:
-                    await channel.send(f"⚠️ **[RobloxAuditLogger] Log Error:** `{str(e)}`")
-                except discord.Forbidden:
-                    pass
+                await channel.send(embed=embed)
+        except Exception:
+            raise
 
     @commands.group(name="rblxaudit", aliases=["robloxaudit"])
     @commands.admin_or_permissions(manage_guild=True)
