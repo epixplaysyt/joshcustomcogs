@@ -74,6 +74,16 @@ class Modmail(commands.Cog):
             return False
         return True
 
+    def _ticket_overwrites(self, guild, role_id):
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        }
+        role = guild.get_role(role_id) if role_id else None
+        if role and role != guild.default_role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        return overwrites
+
     async def _get_main_guild(self, guild: discord.Guild) -> discord.Guild:
         main_guild_id = await self.config.guild(guild).main_guild_id()
         if main_guild_id:
@@ -106,7 +116,7 @@ class Modmail(commands.Cog):
                 channel_name = f"{ticket_id.lower()}-{user_name}".lower().replace(" ", "-")
                 
                 try:
-                    new_channel = await new_guild.create_text_channel(name=channel_name, category=category)
+                    new_channel = await new_guild.create_text_channel(name=channel_name, category=category, overwrites=self._ticket_overwrites(new_guild, role_id))
                     
                     if role_id:
                         dept_role = new_guild.get_role(role_id)
@@ -435,7 +445,7 @@ class Modmail(commands.Cog):
         ticket_id = f"{prefix}{counter}"
 
         channel_name = f"{ticket_id.lower()}-group"
-        channel = await guild.create_text_channel(name=channel_name, category=category)
+        channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=self._ticket_overwrites(guild, role_id))
 
         role_mention = None
         if role_id:
@@ -502,7 +512,7 @@ class Modmail(commands.Cog):
         ticket_id = f"{prefix}{counter}"
 
         channel_name = f"{ticket_id.lower()}-{user.name}".lower().replace(" ", "-")
-        channel = await guild.create_text_channel(name=channel_name, category=category)
+        channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=self._ticket_overwrites(guild, role_id))
 
         role_mention = None
         if role_id:
@@ -1568,7 +1578,7 @@ class Modmail(commands.Cog):
             if old_role_id:
                 old_role = interaction.guild.get_role(old_role_id)
                 if old_role:
-                    await interaction.channel.set_permissions(old_role, overwrite=None)
+                    await interaction.channel.set_permissions(old_role, view_channel=False, send_messages=False)
 
         await interaction.channel.set_permissions(esc_role, read_messages=True, send_messages=True)
 
@@ -1609,7 +1619,7 @@ class Modmail(commands.Cog):
         if old_role_id:
             old_role = interaction.guild.get_role(old_role_id)
             if old_role:
-                await interaction.channel.set_permissions(old_role, overwrite=None)
+                await interaction.channel.set_permissions(old_role, view_channel=False, send_messages=False)
 
         if new_role_id:
             new_role = interaction.guild.get_role(new_role_id)
