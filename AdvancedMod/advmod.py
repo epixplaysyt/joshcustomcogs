@@ -308,7 +308,7 @@ class AdvancedMod(commands.Cog):
         try:
             content = target.mention if tag_user else None
             await target.send(content=content, embed=embed)
-        except discord.Forbidden:
+        except discord.HTTPException:
             pass
 
     async def log_immediate_action(self, guild: discord.Guild, action: str, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, duration_minutes: int = None, duration_days: int = None, duration_str: str = None, appealable: bool = True):
@@ -576,6 +576,8 @@ class AdvancedMod(commands.Cog):
         proof_data = self._get_proof(proof_link, attachment)
         if proof_data == "None Provided": return await ctx.send("❌ Proof missing.", ephemeral=True)
         
+        if not 0 < minutes <= 40320:
+            return await ctx.send("Timeouts must be between 1 minute and 28 days.", ephemeral=True)
         await ctx.send(f"🔇 Timed out {target.mention} for {minutes}m.")
         
         await target.timeout(datetime.timedelta(minutes=minutes), reason=reason)
@@ -633,6 +635,10 @@ class AdvancedMod(commands.Cog):
         if proof_data == "None Provided": return await ctx.send("❌ Proof metadata missing.", ephemeral=True)
 
         seconds = self._parse_duration(duration)
+        if seconds is None and duration.lower().strip() not in {"permanent", "perm", "infinite", "none", "0"}:
+            return await ctx.send("Invalid duration. Use a positive duration such as 1h or 7d.", ephemeral=True)
+        if seconds is not None and seconds <= 0:
+            return await ctx.send("The duration must be positive.", ephemeral=True)
 
         if await self._has_level(ctx, 3):
             await self._process_ban(ctx.guild, target, ctx.author, reason, proof_data, appealable=allow_appeals, temp_duration=seconds, ctx=ctx)
@@ -704,55 +710,59 @@ class AdvancedMod(commands.Cog):
         if appealable:
             hold_time = days_val if days_val else 14
             embed.add_field(name="Appeals", value=f"This restriction is appealable. You will receive an access form via DM in {hold_time} days.")
-            async with self.config.guild(guild).pending_appeals() as appeals_list:
-                appeals_list.append({"user_id": target.id, "timestamp": time.time(), "hold_days": hold_time, "hold_seconds": temp_duration if temp_duration else 0})
+
         else:
             embed.add_field(name="Appeals", value="This execution type is strict and unappealable.")
 
         await self._dm_user(target, embed, tag_user=True)
-        try:
-            await guild.ban(target, reason=reason)
-        except discord.HTTPException:
-            pass
+        await guild.ban(target, reason=reason)
+        async with self.config.guild(guild).pending_appeals() as appeals_list:
+            appeals_list[:] = [a for a in appeals_list if a["user_id"] != target.id]
+            if appealable or temp_duration:
+                appeals_list.append({
+                    "user_id": target.id,
+                    "timestamp": time.time(),
+                    "hold_seconds": temp_duration or 0,
+                    "hold_days": 14,
+                    "appealable": appealable,
+                })
         
         log_prefix = "Override: " if is_override else ""
         log_type = f"{log_prefix}Auto-Ban" if automated else (f"{log_prefix}Tempban" if temp_duration else (f"{log_prefix}Ban" if appealable else f"{log_prefix}Strict Ban"))
         await self.log_immediate_action(guild, log_type, target, moderator, reason, proof, duration_days=days_val, appealable=appealable)
 
-    @tasks.loop(hours=24)
+    @tasks.loop(minutes=1)
     async def appeal_notifier(self):
         current_time = time.time()
-
         for guild_id in await self.config.all_guilds():
             guild = self.bot.get_guild(guild_id)
-            if not guild: continue
+            if not guild:
+                continue
             appeal_link = await self.config.guild(guild).appeal_link()
-            if not appeal_link: continue
-
-            async with self.config.guild(guild).pending_appeals() as appeals_list:
-                to_remove = []
-                for appeal in appeals_list:
-                    days = appeal.get("hold_days", 14)
-                    seconds_required = days * 24 * 60 * 60
-                    
-                    if current_time - appeal["timestamp"] >= seconds_required:
+            async with self.config.guild(guild).pending_appeals() as appeals:
+                for appeal in list(appeals):
+                    duration = appeal.get("hold_seconds", 0)
+                    wait = duration or appeal.get("hold_days", 14) * 86400
+                    if current_time - appeal["timestamp"] < wait:
+                        continue
+                    try:
                         user = self.bot.get_user(appeal["user_id"]) or await self.bot.fetch_user(appeal["user_id"])
-                        if user:
-                            if "hold_days" in appeal and appeal["hold_days"] != 14:
-                                try:
-                                    await guild.unban(user, reason="Temporary ban duration expired.")
-                                except discord.HTTPException:
-                                    pass
-                                    
+                        if duration:
+                            try:
+                                await guild.unban(user, reason="Temporary ban duration expired.")
+                            except discord.NotFound:
+                                pass
+                        if appeal.get("appealable", True) and appeal_link:
                             embed = discord.Embed(
-                                title=f"Appeal / Re-entry Window Opened: {guild.name}", 
-                                description=f"Your {days}-day network hold time has ended.\n\n[Open Form Portal]({appeal_link})",
-                                color=discord.Color.green()
+                                title=f"Appeal / Re-entry Window Opened: {guild.name}",
+                                description=f"Your hold time has ended.\n\n[Open Form Portal]({appeal_link})",
+                                color=discord.Color.green(),
                             )
                             await self._dm_user(user, embed, tag_user=True)
-                        to_remove.append(appeal)
-                for item in to_remove:
-                    appeals_list.remove(item)
+                        if duration or appeal_link or not appeal.get("appealable", True):
+                            appeals.remove(appeal)
+                    except discord.HTTPException:
+                        continue
 
     @appeal_notifier.before_loop
     async def before_appeal_notifier(self):
