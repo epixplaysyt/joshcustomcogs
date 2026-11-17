@@ -3,6 +3,7 @@ from redbot.core import commands, Config
 from discord import app_commands
 from discord.ext import tasks
 import io
+from html import escape
 import datetime
 
 from .views import EmbedBuilderView, TicketConfirmationView, ReplyConfirmationView, UserCloseConfirmationView
@@ -684,6 +685,10 @@ class Modmail(commands.Cog):
                 await self._execute_close(channel, reason="Closed by user request", anonymous=False, closer_id=user.id)
 
     async def _generate_html_transcript(self, channel: discord.TextChannel, owners_text: str, closer_display: str, reason: str, ticket_id: str) -> discord.File:
+        owners_text = escape(owners_text)
+        closer_display = escape(closer_display)
+        reason = escape(reason)
+        ticket_id = escape(ticket_id)
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -719,7 +724,7 @@ class Modmail(commands.Cog):
         <body>
             <div class="header">
                 <h1>Ticket Transcript: {ticket_id}</h1>
-                <p><strong>Channel:</strong> {channel.name}</p>
+                <p><strong>Channel:</strong> {escape(channel.name)}</p>
                 <p><strong>Users:</strong> {owners_text}</p>
                 <p><strong>Closed By:</strong> {closer_display}</p>
                 <p><strong>Reason:</strong> {reason}</p>
@@ -813,12 +818,12 @@ class Modmail(commands.Cog):
             for a in m.attachments:
                 is_image = (a.content_type and a.content_type.startswith('image/')) or any(a.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp'])
                 if is_image:
-                    media_items.append(f'<a href="{a.url}" target="_blank"><img class="attachment-img" src="{a.url}" alt="{a.filename}" loading="lazy"></a>')
+                    media_items.append(f'<a href="{escape(a.url, quote=True)}" target="_blank"><img class="attachment-img" src="{escape(a.url, quote=True)}" alt="{escape(a.filename)}" loading="lazy"></a>')
                 else:
-                    media_items.append(f'<a class="attachment-file" href="{a.url}" target="_blank">📎 {a.filename}</a>')
+                    media_items.append(f'<a class="attachment-file" href="{escape(a.url, quote=True)}" target="_blank">📎 {escape(a.filename)}</a>')
 
             for img_url in embed_images:
-                media_items.append(f'<a href="{img_url}" target="_blank"><img class="attachment-img" src="{img_url}" alt="Embed Media" loading="lazy"></a>')
+                media_items.append(f'<a href="{escape(img_url, quote=True)}" target="_blank"><img class="attachment-img" src="{escape(img_url, quote=True)}" alt="Embed Media" loading="lazy"></a>')
 
             if media_items:
                 attachments_html = f'<div class="media-container">{"".join(media_items)}</div>'
@@ -843,14 +848,14 @@ class Modmail(commands.Cog):
 
             html += f"""
                 <div class="message">
-                    <img class="avatar" src="{avatar_url}">
+                    <img class="avatar" src="{escape(str(avatar_url), quote=True)}">
                     <div class="msg-body">
                         <div class="msg-header">
-                            <span class="username">{username}</span>
+                            <span class="username">{escape(username)}</span>
                             {badge_html}
-                            <span class="timestamp">{timestamp}{footer_meta}</span>
+                            <span class="timestamp">{escape(timestamp)}{escape(footer_meta)}</span>
                         </div>
-                        <div class="content">{content}{attachments_html}</div>
+                        <div class="content">{escape(content)}{attachments_html}</div>
                     </div>
                 </div>
             """
