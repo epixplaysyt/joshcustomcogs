@@ -11,7 +11,7 @@ Ticket channels and command permissions belong to the staff server. Member role 
 | `/modmail unassign member:@staff` | The claimant removes a co-assignee or revokes an invitation. |
 | `/modmail bypass` | An administrator explicitly joins a claimed ticket as a co-assignee. |
 
-Invitations last 24 hours and must be accepted. Acceptance grants access to the ticket channel; removing an invited co-assignee restores their previous permission overwrite. Assignment and invitation data survive restarts. Claimants cannot overwrite another person's claim.
+Co-assignees must have Manage Messages permission in the staff server or be bot owners. This is checked both when inviting them and when they accept. Invitations last 24 hours and must be accepted. Acceptance grants access to the ticket channel; removing an invited co-assignee restores their previous permission overwrite. Assignment and invitation data survive restarts. Claimants cannot overwrite another person's claim.
 
 Restricted replies apply to slash replies, prefix replies, snippets and outgoing reactions. Confirmation buttons recheck the assignment before sending. Internal staff notes remain available. Administrators must use the bypass command before replying to a restricted ticket; merely holding Administrator does not automatically join the assignment. Staff operations retain runtime permission checks, while assigned members can use the reply commands without needing server-wide Manage Messages.
 

@@ -375,3 +375,48 @@ async def test_service_rejects_class_three_decisions(make_cog, accepted):
         await cog.review_appeal(g, 502, reviewer, accepted)
     g.unban.assert_not_awaited()
     assert (await cog.config.guild(g).appeal_requests())[case]['status'] == 'pending'
+
+
+@pytest.mark.asyncio
+async def test_regular_member_cannot_be_invited_to_staff_ticket(make_cog):
+    cog, channel, members = await claimed_ticket(make_cog)
+    members[2].guild_permissions = discord.Permissions.none()
+    with pytest.raises(ValueError, match='Manage Messages'):
+        await cog.invite_assignee(channel, members[1], members[2])
+    members[2].send.assert_not_awaited()
+    assert await cog.config.channel(channel).assignee_invites() == {}
+
+
+@pytest.mark.asyncio
+async def test_staff_permission_is_rechecked_when_accepting_invitation(make_cog):
+    cog, channel, members = await claimed_ticket(make_cog)
+    await cog.invite_assignee(channel, members[1], members[2])
+    members[2].guild_permissions = discord.Permissions.none()
+    with pytest.raises(ValueError, match='staff permissions'):
+        await cog.accept_assignee_invite(channel, 2)
+    channel.set_permissions.assert_not_awaited()
+    assert await cog.config.channel(channel).co_assignees() == []
+
+
+@pytest.mark.asyncio
+async def test_bot_owner_can_join_as_co_assignee_without_manage_messages(make_cog):
+    cog, channel, members = await claimed_ticket(make_cog)
+    members[2].guild_permissions = discord.Permissions.none()
+    cog.bot.is_owner = AsyncMock(side_effect=lambda member: member.id == 2)
+    await cog.invite_assignee(channel, members[1], members[2])
+    await cog.accept_assignee_invite(channel, 2)
+    assert 2 in await cog.config.channel(channel).co_assignees()
+
+
+@pytest.mark.asyncio
+async def test_legacy_ticket_owner_is_not_labeled_as_staff(make_cog):
+    cog = make_cog('ticketmail.ticketmail')
+    async def history(**kwargs):
+        yield SimpleNamespace(author=SimpleNamespace(id=42, name='Legacy user', bot=False), clean_content='Legacy ticket message', created_at=discord.utils.utcnow(), attachments=[], embeds=[])
+    channel = SimpleNamespace(id=10, name='legacy-ticket', guild=guild(), history=history)
+    await cog.config.channel(channel).owner_id.set(42)
+    assert await cog.config.channel(channel).owner_ids() == []
+    file = await cog._generate_html_transcript(channel, 'Legacy user', 'Staff', 'Resolved', 'G1001')
+    html = file.fp.getvalue().decode()
+    assert '<article class="message staff">' not in html
+    assert 'Legacy ticket message' in html

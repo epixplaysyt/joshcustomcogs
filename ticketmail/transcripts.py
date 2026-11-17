@@ -75,6 +75,9 @@ async def render_transcript(cog, channel, owners_text, closer_display, reason, t
     count = 0
     attachment_count = 0
     owners = await cog.config.channel(channel).owner_ids() or []
+    if not owners:
+        legacy_owner = await cog.config.channel(channel).owner_id()
+        owners = [legacy_owner] if legacy_owner else []
     async for message in channel.history(limit=None, oldest_first=True):
         day = message.created_at.strftime("%d %B %Y")
         if day != previous_day:

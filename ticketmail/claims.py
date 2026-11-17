@@ -71,6 +71,8 @@ class ClaimsMixin:
                 raise ValueError("Only the claimant can invite co-assignees.")
             if member.guild.id != channel.guild.id or member.bot:
                 raise ValueError("Choose a staff-server member who is not a bot.")
+            if not member.guild_permissions.manage_messages and not await self.bot.is_owner(member):
+                raise ValueError("Co-assignees must have Manage Messages permission or be a bot owner.")
             if member.id == claimant.id or member.id in data.get("co_assignees", []):
                 raise ValueError("That member is already assigned.")
             view = AssigneeInviteView(self, channel.id, member.id)
@@ -93,6 +95,8 @@ class ClaimsMixin:
             member = channel.guild.get_member(user_id)
             if not member or member.bot:
                 raise ValueError("You are no longer a member of the staff server.")
+            if not member.guild_permissions.manage_messages and not await self.bot.is_owner(member):
+                raise ValueError("You no longer have staff permissions to join this ticket.")
             previous = channel.overwrites_for(member)
             allow, deny = previous.pair()
             overwrite = discord.PermissionOverwrite.from_pair(allow, deny)
