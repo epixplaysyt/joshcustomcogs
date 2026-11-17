@@ -104,7 +104,10 @@ class DynamicRequestView(discord.ui.View):
         req = active_reqs[req_id]
         req_type = req["type"]
         
-        if "kick" in req_type:
+        if "review" in req_type:
+            if not await self.cog._has_level_member(guild, interaction.user, 5):
+                return await interaction.response.send_message("Only Directors can approve this review.", ephemeral=True)
+        elif "kick" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 2):
                 return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class II+ to approve a kick request.", ephemeral=True)
         elif "ban" in req_type:
@@ -122,7 +125,9 @@ class DynamicRequestView(discord.ui.View):
         proof = req["proof"]
         appealable = req.get("appealable", True)
 
-        if "kick" in req_type:
+        if "review" in req_type:
+            pass
+        elif "kick" in req_type:
             if isinstance(target, discord.Member):
                 dm_embed = discord.Embed(title=f"Kicked from {guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
                 await self.cog._dm_user(target, dm_embed, tag_user=True)
