@@ -162,11 +162,6 @@ class TicketConfirmationView(discord.ui.View):
             if channel:
                 main_guild = await self.cog._get_main_guild(self.guild)
                 member = main_guild.get_member(self.user.id)
-                if not member:
-                    for g in self.cog.bot.guilds:
-                        if g.get_member(self.user.id):
-                            member = g.get_member(self.user.id)
-                            break
                 role_name = member.top_role.name if member else "User"
                 ticket_id = await self.cog.config.channel(channel).ticket_id() or "UNKNOWN"
                 import datetime
