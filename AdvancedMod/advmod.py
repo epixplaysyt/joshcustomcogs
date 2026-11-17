@@ -61,7 +61,7 @@ class BanConflictView(discord.ui.View):
         await interaction.response.defer()
         
         async with self.cog.config.guild(interaction.guild).pending_appeals() as appeals:
-            self.cog.config.guild(interaction.guild).pending_appeals.set([a for a in appeals if a["user_id"] != self.target.id])
+            appeals[:] = [a for a in appeals if a["user_id"] != self.target.id]
 
         if self.new_action_type == "tempban":
             await self.cog._execute_ban_action(interaction.guild, self.target, self.moderator, self.reason, self.proof, appealable=self.appealable, temp_duration=self.temp_duration, is_override=True)
@@ -677,7 +677,7 @@ class AdvancedMod(commands.Cog):
                 return
             else:
                 async with self.config.guild(guild).pending_appeals() as appeals:
-                    self.config.guild(guild).pending_appeals.set([a for a in appeals if a["user_id"] != target.id])
+                    appeals[:] = [a for a in appeals if a["user_id"] != target.id]
 
         await self._execute_ban_action(guild, target, moderator, reason, proof, appealable, temp_duration, automated)
         if ctx and not ban_entry:
