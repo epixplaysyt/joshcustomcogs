@@ -351,7 +351,7 @@ async def test_modlog_uses_exact_custom_duration(make_cog, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accepted,level,allowed', [(True, 3, False), (True, 4, True), (True, 5, True), (False, 3, True), (False, 2, False)])
+@pytest.mark.parametrize('accepted,level,allowed', [(True, 3, False), (True, 4, True), (True, 5, True), (False, 3, False), (False, 4, True), (False, 5, True), (False, 2, False)])
 async def test_manager_clearance_for_appeal_acceptance(make_cog, accepted, level, allowed):
     from AdvancedMod.appeals import AppealReviewView
     cog = make_cog('AdvancedMod.advmod')
@@ -365,12 +365,13 @@ async def test_manager_clearance_for_appeal_acceptance(make_cog, accepted, level
 
 
 @pytest.mark.asyncio
-async def test_service_rejects_class_three_acceptance(make_cog):
+@pytest.mark.parametrize('accepted', [True, False])
+async def test_service_rejects_class_three_decisions(make_cog, accepted):
     cog, g, user, reviewer, _, case = await appeal_case(make_cog, ban_reason='Original')
     await cog.submit_appeal(g.id, case, user.id, [('Why?', 'Answer')])
     cog._has_level_member = AsyncMock(side_effect=lambda guild, user, required: required <= 3)
     g.unban = AsyncMock()
     with pytest.raises(ValueError, match='Manager'):
-        await cog.review_appeal(g, 502, reviewer, True)
+        await cog.review_appeal(g, 502, reviewer, accepted)
     g.unban.assert_not_awaited()
     assert (await cog.config.guild(g).appeal_requests())[case]['status'] == 'pending'
