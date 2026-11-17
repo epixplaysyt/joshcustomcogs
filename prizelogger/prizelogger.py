@@ -1,7 +1,11 @@
 import aiohttp
+import asyncio
+import logging
 import discord
 from redbot.core import commands, Config
 from discord.ext import tasks
+
+log = logging.getLogger("red.prizelogger")
 
 class PayoutTracker(commands.Cog):
 
@@ -147,7 +151,7 @@ class PayoutTracker(commands.Cog):
         if display_status == "Scheduled" and due_date:
             try:
                 timestamp = int(int(due_date) / 1000)
-                embed.add_field(name="🕒 Scheduled Date", value=f"` ()`", inline=False)
+                embed.add_field(name="🕒 Scheduled Date", value=f"<t:{timestamp}:F> (<t:{timestamp}:R>)", inline=False)
             except (ValueError, TypeError):
                 pass
                 
@@ -158,10 +162,10 @@ class PayoutTracker(commands.Cog):
         return embed
 
     def determine_display_status(self, raw_status, due_date):
+        if raw_status.upper() in ["PAID OUT", "PAID"]:
+            return "Paid out"
         if due_date:
             return "Scheduled"
-        if raw_status in ["PAID OUT", "PAID"]:
-            return "Paid out"
         return "Logged"
 
     def extract_custom_field(self, task_data, field_id):
