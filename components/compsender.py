@@ -42,6 +42,10 @@ class JsonEmbeds(commands.Cog):
         except json.JSONDecodeError as e:
             return await ctx.send(f"❌ **Invalid JSON format:**\n```py\n{e}\n```")
 
+        if not isinstance(payload, dict):
+            return await ctx.send("The JSON payload must be an object.")
+        payload["allowed_mentions"] = discord.AllowedMentions.none().to_dict()
+
         route = discord.http.Route(
             "POST", 
             "/channels/{channel_id}/messages", 
