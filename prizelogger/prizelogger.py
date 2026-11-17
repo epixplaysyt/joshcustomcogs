@@ -190,135 +190,70 @@ class PayoutTracker(commands.Cog):
         config = await self.config.all()
         if not config["api_key"] or not config["list_id"]:
             return
-            
-        url = f"https://api.clickup.com/api/v2/list/{config['list_id']}/task?include_closed=true"
-        headers = {
-            "Authorization": config["api_key"],
-            "Content-Type": "application/json"
+        url = f"https://api.clickup.com/api/v2/list/{config['list_id']}/task"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                page = 0
+                while True:
+                    async with session.get(url, headers={"Authorization": config["api_key"]}, params={"include_closed": "true", "page": page}) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                    api_tasks = data.get("tasks", [])
+                    for task in api_tasks:
+                        try:
+                            await self._sync_task(task, config)
+                        except (discord.HTTPException, aiohttp.ClientError, asyncio.TimeoutError):
+                            log.warning("Payout notification failed for task %s; retrying on the next poll", task.get("id"))
+                    if data.get("last_page") is True or not api_tasks:
+                        break
+                    page += 1
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            log.warning("Could not fetch payout tasks; retrying on the next poll")
+
+    async def _sync_task(self, task, config):
+        raw_status = task.get("status", {}).get("status", "").upper()
+        task_id = task.get("id")
+        if raw_status == "UNLOGGED" or not task_id:
+            return
+        due_date = task.get("due_date")
+        record = {
+            "status": raw_status,
+            "due_date": due_date,
+            "roblox_username": self.extract_custom_field(task, config["cf_roblox"]),
+            "prize": self.extract_custom_field(task, config["cf_prize"]),
+            "category": self.extract_custom_field(task, config["cf_category"]),
         }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    return
-                
-                data = await response.json()
-                api_tasks = data.get("tasks", [])
-
-                for task in api_tasks:
-                    raw_status = task.get("status", {}).get("status", "").upper()
-                    
-                    if raw_status == "UNLOGGED":
-                        continue
-
-                    task_id = task.get("id")
-                    due_date = task.get("due_date")
-                    roblox = self.extract_custom_field(task, config["cf_roblox"])
-                    prize = self.extract_custom_field(task, config["cf_prize"])
-                    category = self.extract_custom_field(task, config["cf_category"])
-                    display_status = self.determine_display_status(raw_status, due_date)
-
-                    async with self.config.tracked_tasks() as tracked_tasks:
-                        if task_id not in tracked_tasks:
-                            discord_username = task.get("name", "")
-                            user = self.find_user_by_name(discord_username)
-                            if not user:
-                                continue
-
-                            embed = self.build_embed(display_status, roblox, prize, category, due_date)
-                            msg_id = None
-                            channel_id = None
-                            try:
-                                msg = await user.send(content="🎉 **Congratulations!** You have a payout logged to be paid out!", embed=embed)
-                                msg_id = msg.id
-                                channel_id = msg.channel.id
-                            except discord.Forbidden:
-                                pass
-
-                            tracked_tasks[task_id] = {
-                                "message_id": msg_id,
-                                "channel_id": channel_id,
-                                "user_id": user.id,
-                                "status": raw_status,
-                                "due_date": due_date,
-                                "roblox_username": roblox,
-                                "prize": prize,
-                                "category": category
-                            }
-                        else:
-                            task_record = tracked_tasks[task_id]
-                            stored_status = task_record.get("status", "")
-                            stored_due = task_record.get("due_date")
-                            stored_roblox = task_record.get("roblox_username", "")
-                            stored_prize = task_record.get("prize", "")
-                            stored_category = task_record.get("category", "")
-
-                            has_changed = (
-                                raw_status != stored_status or
-                                due_date != stored_due or
-                                roblox != stored_roblox or
-                                prize != stored_prize or
-                                category != stored_category
-                            )
-
-                            if has_changed:
-                                task_record["roblox_username"] = roblox
-                                task_record["prize"] = prize
-                                task_record["category"] = category
-                                
-                                await self.update_user_embed(task_record, display_status, due_date)
-                                
-                                tracked_tasks[task_id]["status"] = raw_status
-                                tracked_tasks[task_id]["due_date"] = due_date
-                                tracked_tasks[task_id]["roblox_username"] = roblox
-                                tracked_tasks[task_id]["prize"] = prize
-                                tracked_tasks[task_id]["category"] = category
+        tracked = await self.config.tracked_tasks()
+        previous = tracked.get(task_id)
+        if previous:
+            if all(previous.get(key) == value for key, value in record.items()) and previous.get("message_id"):
+                return
+            record = {**previous, **record}
+        else:
+            user = self.find_user_by_name(task.get("name", ""))
+            if not user:
+                return
+            record["user_id"] = user.id
+        display_status = self.determine_display_status(raw_status, due_date)
+        updated = await self.update_user_embed(record, display_status, due_date)
+        if updated:
+            async with self.config.tracked_tasks() as tasks_dict:
+                tasks_dict[task_id] = updated
 
     async def update_user_embed(self, task_record, display_status, due_date):
-        try:
-            channel = None
-            if task_record.get("channel_id"):
-                channel = self.bot.get_channel(task_record["channel_id"])
-            if not channel:
-                user = self.bot.get_user(task_record["user_id"]) or await self.bot.fetch_user(task_record["user_id"])
-                if user:
-                    channel = await user.create_dm()
-            
-            if not channel:
-                return
-
-            embed = self.build_embed(
-                display_status,
-                task_record.get("roblox_username", "N/A"),
-                task_record.get("prize", "N/A"),
-                task_record.get("category", "N/A"),
-                due_date
-            )
-            
-            content = "🎉 **Congratulations!** The status of your payout has been changed!"
-
-            if task_record.get("message_id"):
-                try:
-                    msg = await channel.fetch_message(task_record["message_id"])
-                    await msg.edit(content=content, embed=embed)
-                    return
-                except discord.NotFound:
-                    pass
-
-            user = self.bot.get_user(task_record["user_id"]) or await self.bot.fetch_user(task_record["user_id"])
-            if user:
-                msg = await user.send(content=content, embed=embed)
-                async with self.config.tracked_tasks() as t_tasks:
-                    for tid, tdata in t_tasks.items():
-                        if tdata.get("user_id") == task_record["user_id"]:
-                            t_tasks[tid]["message_id"] = msg.id
-                            t_tasks[tid]["channel_id"] = msg.channel.id
-                            break
-            
-        except discord.Forbidden:
-            pass
-        except Exception:
-            pass
+        user = self.bot.get_user(task_record["user_id"]) or await self.bot.fetch_user(task_record["user_id"])
+        channel = await user.create_dm()
+        embed = self.build_embed(display_status, task_record.get("roblox_username", "N/A"), task_record.get("prize", "N/A"), task_record.get("category", "N/A"), due_date)
+        content = "🎉 **Congratulations!** Your payout status has been updated!"
+        if task_record.get("message_id"):
+            try:
+                message = await channel.fetch_message(task_record["message_id"])
+                await message.edit(content=content, embed=embed)
+                return dict(task_record)
+            except discord.NotFound:
+                pass
+        message = await user.send(content=content, embed=embed)
+        return {**task_record, "message_id": message.id, "channel_id": message.channel.id}
 
     @check_tasks_loop.before_loop
     async def before_check_tasks(self):
