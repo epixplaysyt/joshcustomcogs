@@ -60,9 +60,6 @@ class BanConflictView(discord.ui.View):
             
         await interaction.response.defer()
         
-        async with self.cog.config.guild(interaction.guild).pending_appeals() as appeals:
-            appeals[:] = [a for a in appeals if a["user_id"] != self.target.id]
-
         if self.new_action_type == "tempban":
             await self.cog._execute_ban_action(interaction.guild, self.target, self.moderator, self.reason, self.proof, appealable=self.appealable, temp_duration=self.temp_duration, is_override=True)
             await interaction.followup.send(f"✅ Adjusted ban for **{self.target}** to a Temporary Ban ({self.temp_duration} seconds).")
@@ -113,9 +110,6 @@ class DynamicRequestView(discord.ui.View):
         elif "ban" in req_type:
             if not await self.cog._has_level_member(guild, interaction.user, 3):
                 return await interaction.response.send_message("❌ Hierarchy Denied: You must be Class III+ to approve a ban request.", ephemeral=True)
-        elif "review" in req_type:
-            if not await self.cog._has_level_member(guild, interaction.user, 5):
-                return await interaction.response.send_message("❌ Hierarchy Denied: Only Directors can approve this action.", ephemeral=True)
 
         await interaction.response.defer()
 
@@ -131,10 +125,7 @@ class DynamicRequestView(discord.ui.View):
             if isinstance(target, discord.Member):
                 dm_embed = discord.Embed(title=f"Kicked from {guild.name}", description=f"**Reason:** {reason}", color=discord.Color.red())
                 await self.cog._dm_user(target, dm_embed, tag_user=True)
-                try:
-                    await target.kick(reason=reason)
-                except discord.HTTPException:
-                    pass
+                await target.kick(reason=reason)
             await self.cog.log_immediate_action(guild, "Kick", target, interaction.user, reason, proof, appealable=appealable)
         elif "ban" in req_type:
             duration = req.get("duration", None)
@@ -686,9 +677,6 @@ class AdvancedMod(commands.Cog):
                 view = BanConflictView(self, target, moderator, new_action, reason, proof, temp_duration, appealable=appealable)
                 await ctx.send(warning_msg, view=view)
                 return
-            else:
-                async with self.config.guild(guild).pending_appeals() as appeals:
-                    appeals[:] = [a for a in appeals if a["user_id"] != target.id]
 
         await self._execute_ban_action(guild, target, moderator, reason, proof, appealable, temp_duration, automated)
         if ctx and not ban_entry:
@@ -708,8 +696,9 @@ class AdvancedMod(commands.Cog):
         embed = discord.Embed(title=f"Banned from {guild.name}", description=desc, color=discord.Color.dark_red())
         
         if appealable:
-            hold_time = days_val if days_val else 14
-            embed.add_field(name="Appeals", value=f"This restriction is appealable. You will receive an access form via DM in {hold_time} days.")
+            wait_seconds = temp_duration if temp_duration else 14 * 86400
+            release_at = int(time.time() + wait_seconds)
+            embed.add_field(name="Appeals", value=f"This restriction is appealable. Your appeal window opens <t:{release_at}:F>.")
 
         else:
             embed.add_field(name="Appeals", value="This execution type is strict and unappealable.")
