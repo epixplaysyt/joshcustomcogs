@@ -174,8 +174,9 @@ class QuotaTracker(commands.Cog):
 
         await self._check_and_reset_monthly_data(message.author, member_config)
 
-        current_count = await member_config.message_count() + 1
-        await member_config.message_count.set(current_count)
+        async with member_config.message_count.get_lock():
+            current_count = await member_config.message_count() + 1
+            await member_config.message_count.set(current_count)
 
         dept_info = guild_depts[department_name]
         quota = dept_info.get("quota", 0)
@@ -231,6 +232,8 @@ class QuotaTracker(commands.Cog):
         await ctx.send(embed=view.make_embed(), view=view)
 
     @commands.command(name="checkquota")
+    @commands.guild_only()
+    @checks.mod_or_permissions(manage_messages=True)
     async def checkquota(self, ctx: commands.Context, member: discord.Member):
         """Check a staff member's quota and scroll through their history."""
         main_guild_id = await self.config.main_guild_id()
