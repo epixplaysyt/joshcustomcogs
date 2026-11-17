@@ -257,22 +257,15 @@ class ReplyConfirmationView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         
-        if interaction.response.is_done():
-            try:
-                await interaction.edit_original_response(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
-            except Exception:
-                pass
-        else:
-            await interaction.response.edit_message(content="✅ **Reply broadcasted successfully!**", embed=None, view=self)
-
-        await self.cog._execute_staff_reply_action(
-            channel=interaction.channel,
-            author=self.author,
-            content=self.message_content,
-            anonymous=self.anonymous,
-            attachments=self.attachments,
-            specific_target_id=self.specific_target_id
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        sent = await self.cog._execute_staff_reply_action(
+            channel=interaction.channel, author=self.author,
+            content=self.message_content, anonymous=self.anonymous,
+            attachments=self.attachments, specific_target_id=self.specific_target_id,
         )
+        text = "Reply sent to all recipients." if sent else "The ticket assignment changed. The reply was not sent."
+        await interaction.edit_original_response(content=text, embed=None, view=self)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_reply(self, interaction: discord.Interaction, button: discord.ui.Button):

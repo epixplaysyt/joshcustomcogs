@@ -3,12 +3,14 @@ from redbot.core import commands, Config
 from discord import app_commands
 from discord.ext import tasks
 import io
-from html import escape
 import datetime
+
+from .claims import ClaimsMixin
+from .transcripts import render_transcript, TranscriptAttachmentError
 
 from .views import EmbedBuilderView, TicketConfirmationView, ReplyConfirmationView, UserCloseConfirmationView
 
-class Modmail(commands.Cog):
+class Modmail(ClaimsMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=8472938475, force_registration=True)
@@ -53,9 +55,13 @@ class Modmail(commands.Cog):
             "🎫 Need help? DM me to talk to staff!"
         ]
         self.status_index = 0
+        self.init_claims()
         
         self.presence_loop.start()
         self.scheduled_close_loop.start()
+
+    async def cog_load(self):
+        await self.restore_claim_views()
 
     def cog_unload(self):
         self.presence_loop.cancel()
@@ -65,12 +71,13 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
-    async def _check_staff_interaction(self, interaction: discord.Interaction) -> bool:
+    async def _check_staff_interaction(self, interaction: discord.Interaction, allow_assigned=False) -> bool:
         staff_guild_id = await self.config.default_guild_id()
         if not interaction.guild or (staff_guild_id and interaction.guild.id != staff_guild_id):
             await interaction.response.send_message("Use this command in the staff server.", ephemeral=True)
             return False
-        if not interaction.permissions.manage_messages and not await self.bot.is_owner(interaction.user):
+        assigned_access = allow_assigned and await self.can_reply_to_ticket(interaction.channel, interaction.user)
+        if not assigned_access and not interaction.permissions.manage_messages and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
             return False
         return True
@@ -376,7 +383,7 @@ class Modmail(commands.Cog):
                 member = payload.member or (guild.get_member(payload.user_id) if guild else None)
                 if not member or member.bot:
                     return
-                if not member.guild_permissions.manage_messages and not await self.bot.is_owner(member):
+                if not await self.can_reply_to_ticket(channel, member):
                     return
                 
                 main_guild = await self._get_main_guild(channel.guild)
@@ -664,185 +671,8 @@ class Modmail(commands.Cog):
             else:
                 await self._execute_close(channel, reason="Closed by user request", anonymous=False, closer_id=user.id)
 
-    async def _generate_html_transcript(self, channel: discord.TextChannel, owners_text: str, closer_display: str, reason: str, ticket_id: str) -> discord.File:
-        owners_text = escape(owners_text)
-        closer_display = escape(closer_display)
-        reason = escape(reason)
-        ticket_id = escape(ticket_id)
-        html = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Transcript: {ticket_id}</title>
-            <style>
-                :root {{ --bg-main: #313338; --bg-alt: #2b2d31; --text-main: #dbdee1; --text-muted: #949ba4; --accent: #5865F2; }}
-                body {{ background-color: var(--bg-main); color: var(--text-main); font-family: 'gg sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 2rem; margin: 0; line-height: 1.5; }}
-                .header {{ background-color: var(--bg-alt); padding: 24px; border-radius: 12px; margin-bottom: 32px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-left: 4px solid var(--accent); }}
-                .header h1 {{ margin: 0 0 16px 0; color: #fff; font-size: 28px; font-weight: 700; }}
-                .header p {{ margin: 8px 0; font-size: 15px; color: var(--text-muted); }}
-                .header strong {{ color: var(--text-main); }}
-                .message {{ display: flex; margin-bottom: 24px; }}
-                .avatar {{ width: 48px; height: 48px; border-radius: 50%; margin-right: 16px; flex-shrink: 0; object-fit: cover; background-color: var(--bg-alt); }}
-                .msg-body {{ display: flex; flex-direction: column; max-width: 85%; }}
-                .msg-header {{ display: flex; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }}
-                .username {{ color: #fff; font-weight: 600; font-size: 16px; }}
-                .timestamp {{ color: var(--text-muted); font-size: 12px; }}
-                .badge {{ padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
-                .badge-bot {{ background-color: #5865f2; color: #fff; }}
-                .badge-staff {{ background-color: #23a55a; color: #fff; }}
-                .badge-anon {{ background-color: #4f545c; color: #fff; }}
-                .badge-note {{ background-color: #e6a822; color: #fff; }}
-                .content {{ font-size: 15px; color: var(--text-main); white-space: pre-wrap; word-break: break-word; background: var(--bg-alt); padding: 12px 16px; border-radius: 0 8px 8px 8px; }}
-                .media-container {{ margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }}
-                .attachment-img {{ max-width: 100%; max-height: 400px; border-radius: 8px; object-fit: contain; border: 1px solid rgba(255,255,255,0.1); background-color: #1e1f22; display: block; }}
-                .attachment-file {{ display: inline-flex; align-items: center; gap: 6px; background: #2b2d31; padding: 8px 12px; border-radius: 6px; color: #5865f2; text-decoration: none; font-weight: 500; font-size: 14px; border: 1px solid rgba(255,255,255,0.05); width: fit-content; }}
-                .attachment-file:hover {{ text-decoration: underline; background: #35373c; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>Ticket Transcript: {ticket_id}</h1>
-                <p><strong>Channel:</strong> {escape(channel.name)}</p>
-                <p><strong>Users:</strong> {owners_text}</p>
-                <p><strong>Closed By:</strong> {closer_display}</p>
-                <p><strong>Reason:</strong> {reason}</p>
-                <p><strong>Date:</strong> {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-            </div>
-            <div class="messages">
-        """
-
-        messages = [m async for m in channel.history(limit=None, oldest_first=True)]
-        guild = channel.guild
-        owner_ids = await self.config.channel(channel).owner_ids() or []
-
-        for m in messages:
-            username = m.author.name
-            avatar_url = m.author.display_avatar.url
-            content = m.clean_content
-            timestamp = m.created_at.strftime('%Y-%m-%d %I:%M %p UTC')
-            role_str = ""
-            
-            is_anon_msg = False
-            is_note_msg = False
-            is_staff_msg = False
-            is_bot_msg = False
-
-            member_obj = guild.get_member(m.author.id)
-            if member_obj:
-                role_str = member_obj.top_role.name
-                if not m.author.bot:
-                    username = member_obj.display_name
-
-            embed_images = []
-            if m.author.bot:
-                if m.embeds:
-                    embed_obj = m.embeds[0]
-                    footer_text = embed_obj.footer.text if embed_obj.footer else ""
-
-                    if embed_obj.image and embed_obj.image.url:
-                        embed_images.append(embed_obj.image.url)
-
-                    if embed_obj.title == "📝 Internal Note":
-                        is_note_msg = True
-                        if embed_obj.author and embed_obj.author.name:
-                            username = embed_obj.author.name
-                            avatar_url = embed_obj.author.icon_url or avatar_url
-                    elif embed_obj.author and embed_obj.author.name:
-                        if embed_obj.author.name.startswith("[Anonymous]"):
-                            is_anon_msg = True
-                            username = embed_obj.author.name.replace("[Anonymous] ", "")
-                            avatar_url = embed_obj.author.icon_url or avatar_url
-                        elif embed_obj.author.name == "Support Team":
-                            is_anon_msg = True
-                            username = "Support Team"
-                            avatar_url = embed_obj.author.icon_url or avatar_url
-                        elif "User ID:" in footer_text:
-                            username = embed_obj.author.name
-                            avatar_url = embed_obj.author.icon_url or avatar_url
-                        else:
-                            is_staff_msg = True
-                            username = embed_obj.author.name
-                            avatar_url = embed_obj.author.icon_url or avatar_url
-                    else:
-                        is_bot_msg = True
-                        username = self.bot.user.name
-                        avatar_url = self.bot.user.display_avatar.url
-                    
-                    if footer_text:
-                        parts = [p.strip() for p in footer_text.split("|")]
-                        for part in parts:
-                            if part.startswith("Role:"):
-                                role_str = part.replace("Role: ", "")
-                            if "UTC" in part and not part.startswith("Ticket ID"):
-                                timestamp = part
-
-                    if embed_obj.description:
-                        content = embed_obj.description
-                        
-                    if embed_obj.fields:
-                        for field in embed_obj.fields:
-                            if not field.name.startswith("💬 Replying"):
-                                content += f"\n\n**{field.name}**\n{field.value}"
-                else:
-                    is_bot_msg = True
-                    username = self.bot.user.name
-            else:
-                if m.author.id not in owner_ids:
-                    is_staff_msg = True
-
-            attachments_html = ""
-            media_items = []
-
-            for a in m.attachments:
-                is_image = (a.content_type and a.content_type.startswith('image/')) or any(a.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp'])
-                if is_image:
-                    media_items.append(f'<a href="{escape(a.url, quote=True)}" target="_blank"><img class="attachment-img" src="{escape(a.url, quote=True)}" alt="{escape(a.filename)}" loading="lazy"></a>')
-                else:
-                    media_items.append(f'<a class="attachment-file" href="{escape(a.url, quote=True)}" target="_blank">📎 {escape(a.filename)}</a>')
-
-            for img_url in embed_images:
-                media_items.append(f'<a href="{escape(img_url, quote=True)}" target="_blank"><img class="attachment-img" src="{escape(img_url, quote=True)}" alt="Embed Media" loading="lazy"></a>')
-
-            if media_items:
-                attachments_html = f'<div class="media-container">{"".join(media_items)}</div>'
-
-            if not content and not attachments_html:
-                continue
-
-            if is_anon_msg or is_note_msg or is_bot_msg:
-                role_str = ""
-
-            footer_meta = f" - {role_str}" if role_str else ""
-            
-            badge_html = ""
-            if is_note_msg:
-                badge_html = '<span class="badge badge-note">Internal</span>'
-            elif is_anon_msg:
-                badge_html = '<span class="badge badge-anon">Anonymous</span>'
-            elif is_staff_msg:
-                badge_html = '<span class="badge badge-staff">Staff</span>'
-            elif is_bot_msg:
-                badge_html = '<span class="badge badge-bot">Bot</span>'
-
-            html += f"""
-                <div class="message">
-                    <img class="avatar" src="{escape(str(avatar_url), quote=True)}">
-                    <div class="msg-body">
-                        <div class="msg-header">
-                            <span class="username">{escape(username)}</span>
-                            {badge_html}
-                            <span class="timestamp">{escape(timestamp)}{escape(footer_meta)}</span>
-                        </div>
-                        <div class="content">{escape(content)}{attachments_html}</div>
-                    </div>
-                </div>
-            """
-        
-        html += """</div></body></html>"""
-        transcript_file = io.BytesIO(html.encode('utf-8'))
-        return discord.File(transcript_file, filename=f"transcript_{ticket_id}.html")
+    async def _generate_html_transcript(self, channel, owners_text, closer_display, reason, ticket_id):
+        return await render_transcript(self, channel, owners_text, closer_display, reason, ticket_id)
 
     async def _execute_close(self, channel: discord.TextChannel, reason: str, anonymous: bool, closer_id: int, private: bool = False, silent: bool = False):
         owner_ids = await self.config.channel(channel).owner_ids()
@@ -911,7 +741,11 @@ class Modmail(commands.Cog):
 
         closed_ts = int(closed_at.timestamp())
 
-        transcript_file = await self._generate_html_transcript(channel, owners_str, closer_display, reason, ticket_id)
+        try:
+            transcript_file = await self._generate_html_transcript(channel, owners_str, closer_display, reason, ticket_id)
+        except TranscriptAttachmentError as exc:
+            await channel.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+            return False
 
         if private:
             if closer:
@@ -978,13 +812,19 @@ class Modmail(commands.Cog):
         await self.config.channel(channel).clear()
         return True
 
-    async def _execute_staff_reply_action(self, channel: discord.TextChannel, author: discord.User, content: str, anonymous: bool, attachments: list, specific_target_id: int = None):
+    async def _execute_staff_reply_action(self, channel, author, content, anonymous, attachments, specific_target_id=None):
+        async with self._claim_lock:
+            return await self._send_staff_reply(channel, author, content, anonymous, attachments, specific_target_id)
+
+    async def _send_staff_reply(self, channel: discord.TextChannel, author: discord.User, content: str, anonymous: bool, attachments: list, specific_target_id: int = None):
         owner_ids = await self.config.channel(channel).owner_ids()
         legacy_id = await self.config.channel(channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
         
         if not target_ids:
-            return
+            return False
+        if not await self.can_reply_to_ticket(channel, author):
+            return False
 
         now = datetime.datetime.now(datetime.timezone.utc)
         main_guild = await self._get_main_guild(channel.guild)
@@ -1048,6 +888,7 @@ class Modmail(commands.Cog):
         chan_embed.set_footer(text=f"Ticket ID: {ticket_id} | Role: {role_name} | {date_time_str}")
         
         await channel.send(embed=chan_embed, files=get_files())
+        return True
 
     async def _handle_staff_reply(self, message: discord.Message):
         owner_ids = await self.config.channel(message.channel).owner_ids()
@@ -1056,7 +897,8 @@ class Modmail(commands.Cog):
         
         if not target_ids:
             return
-        if not message.author.guild_permissions.manage_messages and not await self.bot.is_owner(message.author):
+        if not await self.can_reply_to_ticket(message.channel, message.author):
+            await message.channel.send("This ticket is restricted to its claimant and co-assignees.", delete_after=10)
             return
 
         clean_content = message.content
@@ -1344,7 +1186,7 @@ class Modmail(commands.Cog):
                     except Exception:
                         pass
 
-    ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets", guild_only=True, default_permissions=discord.Permissions(manage_messages=True))
+    ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets", guild_only=True, default_permissions=discord.Permissions(view_channel=True))
 
     @ticket_group.command(name="open", description="Open a ticket for a specific user.")
     @app_commands.default_permissions(manage_messages=True)
@@ -1452,8 +1294,10 @@ class Modmail(commands.Cog):
     @app_commands.describe(message="The message to send to the user(s).", anonymous="Send anonymously as Support Team?")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_reply_cmd(self, interaction: discord.Interaction, message: str, anonymous: bool = False):
-        if not await self._check_staff_interaction(interaction):
+        if not await self._check_staff_interaction(interaction, allow_assigned=True):
             return
+        if not await self.can_reply_to_ticket(interaction.channel, interaction.user):
+            return await interaction.response.send_message("This ticket is restricted to its claimant and co-assignees.", ephemeral=True)
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1463,8 +1307,8 @@ class Modmail(commands.Cog):
 
         if len(target_ids) == 1:
             await interaction.response.defer(ephemeral=True)
-            await self._execute_staff_reply_action(interaction.channel, interaction.user, message, anonymous, [])
-            return await interaction.followup.send("✅ Reply sent.", ephemeral=True)
+            sent = await self._execute_staff_reply_action(interaction.channel, interaction.user, message, anonymous, [])
+            return await interaction.followup.send("Reply sent." if sent else "The assignment changed; the reply was not sent.", ephemeral=True)
 
         view = ReplyConfirmationView(self, interaction.user, message, anonymous, attachments=[])
         embed = discord.Embed(
@@ -1479,8 +1323,10 @@ class Modmail(commands.Cog):
     @app_commands.describe(user_id="The User ID or mention of the user to send the message to.", message="The message content.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_replyto_cmd(self, interaction: discord.Interaction, user_id: str, message: str):
-        if not await self._check_staff_interaction(interaction):
+        if not await self._check_staff_interaction(interaction, allow_assigned=True):
             return
+        if not await self.can_reply_to_ticket(interaction.channel, interaction.user):
+            return await interaction.response.send_message("This ticket is restricted to its claimant and co-assignees.", ephemeral=True)
         owner_ids = await self.config.channel(interaction.channel).owner_ids() or []
         try:
             clean_id = int(user_id.strip("<@!>"))
@@ -1505,7 +1351,9 @@ class Modmail(commands.Cog):
                 pass
 
         dummy = DummyMsg(interaction.channel, interaction.user, message, interaction.guild, None, [])
-        await self._execute_staff_reply_action(interaction.channel, interaction.user, message, False, [], specific_target_id=clean_id)
+        sent = await self._execute_staff_reply_action(interaction.channel, interaction.user, message, False, [], specific_target_id=clean_id)
+        if not sent:
+            return await interaction.followup.send("The assignment changed; the reply was not sent.", ephemeral=True)
         
         target_user = self.bot.get_user(clean_id)
         name = target_user.name if target_user else str(clean_id)
@@ -1523,23 +1371,50 @@ class Modmail(commands.Cog):
                     choices.append(app_commands.Choice(name=name, value=str(uid)))
         return choices[:25]
 
-    @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
-    @app_commands.default_permissions(manage_messages=True)
-    async def ticket_claim(self, interaction: discord.Interaction):
+    @ticket_group.command(name="claim", description="Claim this ticket and optionally restrict replies to assigned staff.")
+    @app_commands.describe(restrict="Only the claimant and co-assignees may reply to the ticket users.")
+    async def ticket_claim(self, interaction: discord.Interaction, restrict: bool = False):
         if not await self._check_staff_interaction(interaction):
             return
-        owner_ids = await self.config.channel(interaction.channel).owner_ids()
-        legacy_id = await self.config.channel(interaction.channel).owner_id()
-        if not owner_ids and not legacy_id:
-            return await interaction.response.send_message("❌ This channel is not an active ticket.", ephemeral=True)
-        
-        await interaction.channel.edit(topic=f"Assigned Handler: {interaction.user.display_name}")
-        
-        embed = discord.Embed(
-            description=f"✋ **{interaction.user.mention} is now handling this ticket.**",
-            color=discord.Color.brand_green()
-        )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.defer()
+        try:
+            await self.claim_ticket(interaction.channel, interaction.user, restrict)
+        except ValueError as exc:
+            return await interaction.followup.send(str(exc), ephemeral=True)
+        await interaction.channel.edit(topic=f"Claimed by {interaction.user.display_name} | {'Assigned staff only' if restrict else 'Staff replies open'}")
+        await interaction.followup.send(f"{interaction.user.mention} claimed this ticket. Replies are {'restricted to assigned staff' if restrict else 'open to staff'}.")
+
+    @ticket_group.command(name="invite", description="Invite a staff member to join your ticket as a co-assignee.")
+    async def ticket_invite(self, interaction: discord.Interaction, member: discord.Member):
+        if not await self._check_staff_interaction(interaction, allow_assigned=True):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.invite_assignee(interaction.channel, interaction.user, member)
+        except (ValueError, discord.HTTPException) as exc:
+            return await interaction.followup.send(f"Invitation not sent: {exc}", ephemeral=True)
+        await interaction.followup.send(f"An invitation has been sent to {member.mention}.", ephemeral=True)
+
+    @ticket_group.command(name="unassign", description="Remove a co-assignee or revoke an invitation from your ticket.")
+    async def ticket_unassign(self, interaction: discord.Interaction, member: discord.Member):
+        if not await self._check_staff_interaction(interaction, allow_assigned=True):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.remove_assignee(interaction.channel, interaction.user, member)
+        except (ValueError, discord.HTTPException) as exc:
+            return await interaction.followup.send(str(exc), ephemeral=True)
+        await interaction.followup.send(f"{member.mention} is no longer assigned or invited.", ephemeral=True)
+
+    @ticket_group.command(name="bypass", description="Administrators: add yourself as a co-assignee to a claimed ticket.")
+    async def ticket_bypass(self, interaction: discord.Interaction):
+        if not await self._check_staff_interaction(interaction):
+            return
+        try:
+            await self.bypass_claim(interaction.channel, interaction.user)
+        except ValueError as exc:
+            return await interaction.response.send_message(str(exc), ephemeral=True)
+        await interaction.response.send_message(f"{interaction.user.mention} joined as a co-assignee using administrator bypass.")
 
     @ticket_group.command(name="escalate", description="Escalate this ticket to the higher-tier staff role.")
     @app_commands.describe(silent="Perform escalation silently without channel announcements?")
