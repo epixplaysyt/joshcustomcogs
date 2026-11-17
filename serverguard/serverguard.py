@@ -1,4 +1,5 @@
 import discord
+import asyncio
 import io
 import datetime
 import re
@@ -20,7 +21,7 @@ class ServerGuard(commands.Cog):
             "threshold": 5
         }
         self.config.register_guild(**default_guild)
-        self.user_channel_history = defaultdict(set)
+        self.user_channel_history = defaultdict(deque)
         self.user_timestamps = defaultdict(deque)
         self.invite_pattern = re.compile(r"(?:https?://)?(?:www\.)?(?:discord\.(?:gg|io|me|li|com/invite)|discord(?:app)?\.com/invite)/\w+")
 
@@ -34,7 +35,7 @@ class ServerGuard(commands.Cog):
         if message.author.guild_permissions.manage_messages:
             return
 
-        has_image = bool(message.attachments)
+        has_image = any(a.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")) for a in message.attachments)
         has_invite = bool(self.invite_pattern.search(message.content))
 
         if not has_image and not has_invite:
@@ -52,8 +53,7 @@ class ServerGuard(commands.Cog):
                     continue
                 try:
                     image_bytes = await attachment.read()
-                    image = Image.open(io.BytesIO(image_bytes))
-                    incoming_hash = imagehash.phash(image)
+                    incoming_hash = await asyncio.to_thread(self._hash_image, image_bytes)
 
                     for bad_hex in blacklisted_hexes:
                         bad_hash = imagehash.hex_to_hash(bad_hex)
@@ -64,11 +64,13 @@ class ServerGuard(commands.Cog):
                 except Exception:
                     continue
 
-        if has_invite and not blacklisted_hexes:
-            matched = True
-
         if matched or (has_image and has_invite):
             await self.handle_scam_attempt(message, best_diff if best_diff != 999 else 0, has_invite)
+
+    @staticmethod
+    def _hash_image(data):
+        with Image.open(io.BytesIO(data)) as image:
+            return imagehash.phash(image)
 
     async def handle_scam_attempt(self, message: discord.Message, diff_score: int, has_invite: bool):
         guild = message.guild
@@ -86,9 +88,13 @@ class ServerGuard(commands.Cog):
         ]
         total_accessible = len(accessible_channels)
 
-        user_id = member.id
-        self.user_channel_history[user_id].add(channel.id)
-        channels_ratio = len(self.user_channel_history[user_id]) / max(total_accessible, 1)
+        user_id = (guild.id, member.id)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        history = self.user_channel_history[user_id]
+        history.append((now, channel.id))
+        while history and (now - history[0][0]).total_seconds() > 30:
+            history.popleft()
+        channels_ratio = len({cid for _, cid in history}) / max(total_accessible, 1)
         channel_score = min(channels_ratio * 30.0, 30.0)
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -133,7 +139,7 @@ class ServerGuard(commands.Cog):
         embed.add_field(name="Action Taken", value="Message deleted. No timeout applied.")
 
         role_ping = f"<@&{mod_role_id}>" if mod_role_id else "⚠️ Staff Alert:"
-        await log_channel.send(content=f"{role_ping} Potential compromised account detected[cite: 1, 2].", embed=embed)
+        await log_channel.send(content=f"{role_ping} Potential compromised account detected.", embed=embed)
 
     @commands.group(name="serverguard", aliases=["sguard"])
     @commands.admin_or_permissions(manage_guild=True)
@@ -168,8 +174,7 @@ class ServerGuard(commands.Cog):
                         return
                     data = await resp.read()
             
-            image = Image.open(io.BytesIO(data))
-            new_hash = str(imagehash.phash(image))
+            new_hash = str(await asyncio.to_thread(self._hash_image, data))
 
             async with self.config.guild(ctx.guild).blacklisted_hashes() as hashes:
                 if new_hash in hashes:
