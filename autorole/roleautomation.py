@@ -39,8 +39,8 @@ class RoleAutomation(commands.Cog):
                     return
 
                 try:
-                    await after.remove_roles(role, reason="Role Automation: Swap trigger removed.")
                     await after.add_roles(replacement_role, reason="Role Automation: Swap replacement added.")
+                    await after.remove_roles(role, reason="Role Automation: Swap trigger removed.")
                 except discord.Forbidden:
                     pass  
                 except discord.HTTPException:
@@ -84,8 +84,8 @@ class RoleAutomation(commands.Cog):
             return
 
         try:
-            await member.remove_roles(trigger_role, reason=f"Manual Role Swap requested by {author.display_name}")
             await member.add_roles(replacement_role, reason=f"Manual Role Swap requested by {author.display_name}")
+            await member.remove_roles(trigger_role, reason=f"Manual Role Swap requested by {author.display_name}")
             
             if member == author:
                 await ctx.send(f"✅ Successfully updated your roles! Removed **{trigger_role.name}** and added **{replacement_role.name}**.", ephemeral=True)
