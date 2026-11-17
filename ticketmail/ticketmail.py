@@ -1031,7 +1031,7 @@ class Modmail(commands.Cog):
                     user_embed = discord.Embed(description=embed_desc, color=discord.Color.green(), timestamp=now)
                     if anonymous:
                         guild_icon = channel.guild.icon.url if channel.guild.icon else self.bot.user.display_avatar.url
-                        user_embed.set_author(name="Support Team", icon_url=guild_icon, url=f"https://discord.com/users/{author.id}")
+                        user_embed.set_author(name="Support Team", icon_url=guild_icon)
                         user_embed.set_footer(text=f"Ticket ID: {ticket_id} | {date_time_str}")
                     else:
                         user_embed.set_author(name=staff_name, icon_url=author.display_avatar.url, url=f"https://discord.com/users/{author.id}")
