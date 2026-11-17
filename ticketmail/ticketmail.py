@@ -93,74 +93,47 @@ class Modmail(commands.Cog):
                 return mg
         return guild
 
-    async def _migrate_tickets_to_new_guild(self, old_guild: discord.Guild, new_guild: discord.Guild):
+    async def _migrate_tickets_to_new_guild(self, old_guild, new_guild):
         if old_guild == new_guild:
             return
         for channel in old_guild.text_channels:
-            owner_ids = await self.config.channel(channel).owner_ids()
-            legacy_id = await self.config.channel(channel).owner_id()
-            target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
-            if target_ids:
-                ticket_id = await self.config.channel(channel).ticket_id() or "UNKNOWN"
-                department = await self.config.channel(channel).department() or "general"
-                waiting_since = await self.config.channel(channel).waiting_since()
-                
-                departments = await self.config.guild(new_guild).departments()
-                dept_data = departments.get(department, {}) if isinstance(departments, dict) else {}
-                role_id = dept_data.get("role_id")
-                
-                master_category_id = await self.config.guild(new_guild).ticket_category_id()
-                category = new_guild.get_channel(master_category_id) if master_category_id else None
-                
-                users = [self.bot.get_user(uid) for uid in target_ids if self.bot.get_user(uid)]
-                user_name = users[0].name if users else "ticket"
-                channel_name = f"{ticket_id.lower()}-{user_name}".lower().replace(" ", "-")
-                
-                try:
-                    new_channel = await new_guild.create_text_channel(name=channel_name, category=category, overwrites=self._ticket_overwrites(new_guild, role_id))
-                    
-                    if role_id:
-                        dept_role = new_guild.get_role(role_id)
-                        if dept_role:
-                            await new_channel.set_permissions(dept_role, read_messages=True, send_messages=True)
-                            
-                    await self.config.channel(new_channel).owner_ids.set(target_ids)
-                    await self.config.channel(new_channel).owner_id.set(target_ids[0] if target_ids else None)
-                    await self.config.channel(new_channel).ticket_id.set(ticket_id)
-                    await self.config.channel(new_channel).department.set(department)
-                    await self.config.channel(new_channel).waiting_since.set(waiting_since)
-                    
-                    for uid in target_ids:
-                        await self.config.user_from_id(uid).active_channel_id.set(new_channel.id)
-                        
-                    try:
-                        old_messages = [m async for m in channel.history(limit=50, oldest_first=True)]
-                        for om in old_messages:
-                            if om.author == self.bot.user and om.embeds:
-                                files = [await a.to_file() for a in om.attachments]
-                                await new_channel.send(embed=om.embeds[0], files=files)
-                            elif not om.author.bot:
-                                files = [await a.to_file() for a in om.attachments]
-                                embed = discord.Embed(description=om.content, timestamp=om.created_at, color=discord.Color.blue())
-                                embed.set_author(name=om.author.name, icon_url=om.author.display_avatar.url, url=f"https://discord.com/users/{om.author.id}")
-                                await new_channel.send(embed=embed, files=files)
-                    except Exception:
-                        pass
-                        
-                    embed = discord.Embed(
-                        title=f"🔄 Ticket Transferred - {ticket_id}",
-                        description="This ticket was automatically transferred here due to a staff server destination change.",
-                        color=discord.Color.orange(),
-                        timestamp=datetime.datetime.now(datetime.timezone.utc)
-                    )
-                    users_desc = "\n".join([f"<@{uid}> (`{uid}`)" for uid in target_ids])
-                    embed.add_field(name="Participants", value=users_desc, inline=False)
-                    await new_channel.send(embed=embed)
-                    
-                    await self.config.channel(channel).clear()
-                    await channel.delete(reason="Ticket transferred to new staff server")
-                except Exception:
-                    pass
+            data = await self.config.channel(channel).all()
+            target_ids = data.get("owner_ids") or ([data["owner_id"]] if data.get("owner_id") else [])
+            if not target_ids:
+                continue
+            department = data.get("department") or "general"
+            departments = await self.config.guild(new_guild).departments()
+            role_id = departments.get(department, {}).get("role_id")
+            category_id = await self.config.guild(new_guild).ticket_category_id()
+            category = new_guild.get_channel(category_id) if category_id else None
+            ticket_id = data.get("ticket_id") or "UNKNOWN"
+            new_channel = await new_guild.create_text_channel(
+                name=channel.name, category=category,
+                overwrites=self._ticket_overwrites(new_guild, role_id),
+            )
+            try:
+                async for message in channel.history(limit=None, oldest_first=True):
+                    files = [await attachment.to_file() for attachment in message.attachments]
+                    if message.author == self.bot.user:
+                        embeds = message.embeds
+                        content = message.content
+                    else:
+                        embed = discord.Embed(description=message.content or "[Attachment]", timestamp=message.created_at)
+                        embed.set_author(name=message.author.display_name)
+                        embeds = [embed]
+                        content = None
+                    if content or embeds or files:
+                        await new_channel.send(content=content, embeds=embeds, files=files, allowed_mentions=discord.AllowedMentions.none())
+                transcript = await self._generate_html_transcript(channel, ", ".join(map(str, target_ids)), "Server transfer", "Server transfer", ticket_id)
+                await new_channel.send(content="Original ticket transcript", file=transcript)
+            except Exception:
+                await new_channel.delete(reason="Ticket migration failed; original preserved")
+                raise
+            await self.config.channel(new_channel).set(data)
+            for uid in target_ids:
+                await self.config.user_from_id(uid).active_channel_id.set(new_channel.id)
+            await channel.delete(reason="Ticket transferred to new staff server")
+            await self.config.channel(channel).clear()
 
     def is_in_hours(self, start_str, end_str):
         if not start_str or not end_str:
@@ -1783,12 +1756,12 @@ class Modmail(commands.Cog):
         old_default_id = await self.config.default_guild_id()
         old_guild = self.bot.get_guild(old_default_id) if old_default_id else None
         
-        await self.config.default_guild_id.set(ctx.guild.id)
-        
         if old_guild and old_guild != ctx.guild:
             await self._migrate_tickets_to_new_guild(old_guild, ctx.guild)
+            await self.config.default_guild_id.set(ctx.guild.id)
             await ctx.send(f"✅ **{ctx.guild.name}** has been established as the staff server destination, and open tickets have been automatically transferred here.")
         else:
+            await self.config.default_guild_id.set(ctx.guild.id)
             await ctx.send(f"✅ **{ctx.guild.name}** has been established as the destination server.")
 
     @modmailset.command(name="logchannel")
