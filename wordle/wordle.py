@@ -105,6 +105,10 @@ class TransportWordle(commands.Cog):
         self.config.register_user(**default_user)
         self.daily_check.start()
 
+    async def cog_load(self):
+        for user_id, data in (await self.config.all_users()).items():
+            self.bot.add_view(WordleDMView(self, int(user_id), completed=data.get("completed", False)))
+
     def cog_unload(self):
         self.daily_check.cancel()
 
@@ -367,6 +371,9 @@ class TransportWordle(commands.Cog):
         user_config = self.config.user(user)
         user_data = await user_config.all()
 
+        if user_data.get("date") != today:
+            user_data = {"date": today, "guesses": [], "results": [], "completed": False, "won": False, "start_time": datetime.datetime.now(datetime.timezone.utc).timestamp(), "finish_time": None}
+
         if user_data["completed"]:
             await interaction.followup.send("You have already finished today's Wordle!", ephemeral=True)
             return
@@ -395,6 +402,8 @@ class TransportWordle(commands.Cog):
                 await interaction.followup.send(f"**{guess}** is not a recognized word in the dictionary.", ephemeral=True)
                 return
 
+        if not user_data.get("start_time"):
+            user_data["start_time"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
         feedback = self.evaluate_guess(guess, secret_word)
         user_data["guesses"].append(guess)
         user_data["results"].append(feedback)
