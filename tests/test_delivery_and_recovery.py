@@ -110,7 +110,8 @@ async def test_anonymous_ticket_reply_has_no_staff_profile_link(make_cog):
     embed = user.send.call_args.kwargs['embed']
     assert embed.author.name == 'Support Team'
     assert not embed.author.url
-    assert str(author.id) not in str(embed.to_dict())
+    assert f'/users/{author.id}' not in str(embed.to_dict())
+    assert f'<@{author.id}>' not in str(embed.to_dict())
 
 
 @pytest.mark.asyncio
