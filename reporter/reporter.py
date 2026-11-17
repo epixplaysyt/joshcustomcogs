@@ -9,6 +9,9 @@ class ResolveView(discord.ui.View):
 
     @discord.ui.button(label="Mark Resolved", style=discord.ButtonStyle.success, custom_id="resolve_report_button")
     async def resolve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.permissions.manage_messages:
+            return await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+        await interaction.response.defer()
         embed = interaction.message.embeds[0]
         
         reporter_field = embed.fields[1].value
@@ -33,7 +36,7 @@ class ResolveView(discord.ui.View):
         button.disabled = True
         button.label = "Resolved"
         
-        await interaction.response.edit_message(content=f"**Resolved by {interaction.user.mention}**", embed=embed, view=self)
+        await interaction.edit_original_response(content=f"**Resolved by {interaction.user.mention}**", embed=embed, view=self)
 
 
 class ReportModal(discord.ui.Modal):
@@ -51,13 +54,14 @@ class ReportModal(discord.ui.Modal):
         self.add_item(self.extra_info)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         guild_data = await self.config.guild(interaction.guild).all()
         channel_id = guild_data["report_channel"]
         mod_role_id = guild_data["mod_role"]
 
         report_channel = interaction.guild.get_channel(channel_id)
         if not report_channel:
-            await interaction.response.send_message("The configured report channel could not be found.", ephemeral=True)
+            await interaction.followup.send("The configured report channel could not be found.", ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -78,7 +82,7 @@ class ReportModal(discord.ui.Modal):
         if self.message.attachments:
             embed.add_field(name="Attachments", value=f"{len(self.message.attachments)} attachment(s) included.", inline=False)
             first_attachment = self.message.attachments[0]
-            if first_attachment.url.lower().endswith(('png', 'jpg', 'jpeg', 'gif', 'webp')):
+            if first_attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
                 embed.set_image(url=first_attachment.url)
 
         content = ""
@@ -89,9 +93,9 @@ class ReportModal(discord.ui.Modal):
 
         try:
             await report_channel.send(content=content, embed=embed, view=ResolveView())
-            await interaction.response.send_message("✅ Thank you. The message has been successfully reported.", ephemeral=True)
+            await interaction.followup.send("✅ Thank you. The message has been successfully reported.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ I don't have permission to send messages to the staff report channel.", ephemeral=True)
+            await interaction.followup.send("❌ I don't have permission to send messages to the staff report channel.", ephemeral=True)
 
 
 class MessageReporter(commands.Cog):
