@@ -1,14 +1,54 @@
 import base64
+import asyncio
 import datetime
 import io
 import zipfile
+from urllib.parse import urlsplit, urlunsplit
 from html import escape
 
 import discord
+import aiohttp
 
 
 class TranscriptAttachmentError(Exception):
     pass
+
+
+async def avatar_data(url, cache):
+    url = str(url or "")
+    if url in cache:
+        return cache[url]
+    cache[url] = ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or parsed.hostname not in {"cdn.discordapp.com", "media.discordapp.net"} or parsed.username or parsed.password:
+        return ""
+    try:
+        if parsed.port not in (None, 443):
+            return ""
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+            fetch_url = url
+            if parsed.path.startswith(("/avatars/", "/icons/")):
+                path = parsed.path.rsplit(".", 1)[0] + ".png"
+                fetch_url = urlunsplit((parsed.scheme, parsed.netloc, path, "size=64", ""))
+            async with session.get(fetch_url, allow_redirects=False) as response:
+                if response.status != 200:
+                    return ""
+                mime = response.headers.get("Content-Type", "").split(";")[0]
+                if mime not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+                    return ""
+                try:
+                    await response.content.readexactly(262145)
+                except asyncio.IncompleteReadError as exc:
+                    data = exc.partial
+                else:
+                    return ""
+                cache[url] = f'data:{mime};base64,{base64.b64encode(data).decode("ascii")}'
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        pass
+    return cache[url]
 
 
 def safe_url(url):
@@ -71,6 +111,7 @@ main{min-width:0}.topbar{height:54px;display:flex;align-items:center;gap:12px;pa
 
 async def render_transcript(cog, channel, owners_text, closer_display, reason, ticket_id):
     records = []
+    avatars = {}
     previous_day = None
     count = 0
     attachment_count = 0
@@ -84,6 +125,7 @@ async def render_transcript(cog, channel, owners_text, closer_display, reason, t
             records.append(f'<div class="day">{day}</div>')
             previous_day = day
         author = message.author
+        avatar_url = str(getattr(getattr(author, "display_avatar", None), "url", ""))
         name = author.display_name if hasattr(author, "display_name") else author.name
         content = message.clean_content
         badge = '<span class="badge">BOT</span>' if author.bot else ""
@@ -93,6 +135,7 @@ async def render_transcript(cog, channel, owners_text, closer_display, reason, t
             first = message.embeds[0]
             if first.author and first.author.name:
                 name = first.author.name
+                avatar_url = str(first.author.icon_url or avatar_url)
                 staff = True
                 if name.startswith("[Anonymous]") or name == "Support Team":
                     badge = '<span class="badge anonymous">ANONYMOUS</span>'
@@ -121,6 +164,9 @@ async def render_transcript(cog, channel, owners_text, closer_display, reason, t
             attachment_count += 1
         timestamp = message.created_at.strftime("%H:%M UTC")
         initial = escape(name[:1].upper())
+        picture = await avatar_data(avatar_url, avatars)
+        if picture:
+            initial = f'<img src="{picture}" alt="{escape(name, quote=True)}" style="width:100%;height:100%;object-fit:cover">'
         records.append(f'<article class="message {"staff" if staff else ""}"><div class="avatar">{initial}</div><div class="msg-body"><div class="msg-header"><span class="username">{escape(name)}</span>{badge}<time class="timestamp">{timestamp}</time></div><div class="content">{escape(content)}</div>{"".join(embeds)}{"".join(attachments)}</div></article>')
         count += 1
     name = escape(channel.name)
