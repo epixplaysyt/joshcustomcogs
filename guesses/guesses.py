@@ -65,6 +65,7 @@ class Guesses(commands.Cog):
         self.config = Config.get_conf(self, identifier=9283746150, force_registration=True)
         default_guild = {
             "guess_channel_id": None,
+            "active_session": None,
             "role_host": None,
             "role_manager": None,
             "role_probation": None,
@@ -87,6 +88,17 @@ class Guesses(commands.Cog):
         self.session_regular_cd = 120 
         self.session_winner_cd = 30
 
+    async def cog_load(self):
+        for guild_id, settings in (await self.config.all_guilds()).items():
+            session = settings.get("active_session")
+            if session:
+                self.is_active = True
+                self.session_answer = session["answer"]
+                self.session_auto_mark = session["auto_mark"]
+                self.session_regular_cd = session["regular_cd"]
+                self.session_winner_cd = session["winner_cd"]
+                break
+
     async def _open_guessing_channel(self, guild, channel, answer: str, auto_mark: bool, reg_cd: int, win_cd: int):
         self.is_active = True
         self.user_guesses.clear()
@@ -97,7 +109,10 @@ class Guesses(commands.Cog):
         self.session_regular_cd = reg_cd
         self.session_winner_cd = win_cd
 
-        await channel.set_permissions(guild.default_role, send_messages=True)
+        overwrite = channel.overwrites_for(guild.default_role)
+        overwrite.send_messages = True
+        await channel.set_permissions(guild.default_role, overwrite=overwrite)
+        await self.config.guild(guild).active_session.set({"answer": answer, "auto_mark": auto_mark, "regular_cd": reg_cd, "winner_cd": win_cd})
         
         msg_text = await self.config.guild(guild).msg_open()
         
@@ -113,7 +128,10 @@ class Guesses(commands.Cog):
     async def _close_guessing_channel(self, guild, channel, answer: str, winner: discord.Member = None):
         self.is_active = False
 
-        await channel.set_permissions(guild.default_role, send_messages=False)
+        overwrite = channel.overwrites_for(guild.default_role)
+        overwrite.send_messages = False
+        await channel.set_permissions(guild.default_role, overwrite=overwrite)
+        await self.config.guild(guild).active_session.set(None)
 
         config_data = await self.config.guild(guild).all()
         msg_template = config_data["msg_close"]
