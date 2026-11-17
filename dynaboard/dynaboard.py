@@ -93,6 +93,11 @@ class BuilderActionView(discord.ui.View):
                 "fields": []
             }
 
+    async def interaction_check(self, interaction):
+        return interaction.user.id == self.ctx.author.id and (
+            interaction.user.guild_permissions.manage_guild or await self.cog.bot.is_admin(interaction.user) or await self.cog.bot.is_owner(interaction.user)
+        )
+
     def generate_embed(self):
         embed = discord.Embed(
             title=self.board_data["title"],
@@ -104,7 +109,10 @@ class BuilderActionView(discord.ui.View):
         return embed
 
     async def update_message(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(embed=self.generate_embed(), view=self)
+        embed = self.generate_embed()
+        if len(embed) > 6000:
+            return await interaction.response.send_message("The embed exceeds 6,000 characters. Shorten the text or clear fields.", ephemeral=True)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="Edit Basics", style=discord.ButtonStyle.primary, custom_id="ib_edit")
     async def edit_basics(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -123,7 +131,11 @@ class BuilderActionView(discord.ui.View):
 
     @discord.ui.button(label="Save Board", style=discord.ButtonStyle.success, custom_id="ib_save")
     async def save_board(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(self.generate_embed()) > 6000:
+            return await interaction.response.send_message("The embed exceeds 6,000 characters.", ephemeral=True)
         async with self.cog.config.guild(self.ctx.guild).boards() as boards:
+            if self.original_name is None and self.board_data["name"] not in boards and len(boards) >= 25:
+                return await interaction.response.send_message("A maximum of 25 boards can be published.", ephemeral=True)
             # If renamed, delete the old entry
             if self.original_name and self.original_name != self.board_data["name"]:
                 if self.original_name in boards:
