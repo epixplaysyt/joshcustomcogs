@@ -45,9 +45,14 @@ class LastToLeave(commands.Cog):
         if not all([vc, role, host_role]):
             return await ctx.send("❌ Configuration error. Check setup.")
 
+        if data["is_active"]:
+            return await ctx.send("An event is already active.")
+        if len([m for m in vc.members if not m.bot and host_role not in m.roles]) < 2:
+            return await ctx.send("At least two participants must be in the voice channel.")
+
         # Assign role to all non-host members in VC
         for member in vc.members:
-            if host_role not in member.roles:
+            if not member.bot and host_role not in member.roles:
                 await member.add_roles(role)
 
         await self.config.guild(ctx.guild).is_active.set(True)
@@ -67,20 +72,27 @@ class LastToLeave(commands.Cog):
 
         if before.channel and before.channel.id == data["vc_id"]:
             role = guild.get_role(data["participant_role_id"])
+            if not role or role not in member.roles:
+                return
             await member.remove_roles(role)
             
             # Log Elimination
             announce_chan = guild.get_channel(data["announce_channel_id"])
             embed = discord.Embed(title="❌ Player Eliminated", description=f"{member.name} has left!", color=discord.Color.red())
-            await announce_chan.send(embed=embed)
+            if announce_chan:
+                await announce_chan.send(embed=embed)
 
             # Check Winner
-            participants = [m for m in before.channel.members if host_role not in m.roles]
+            participants = [m for m in before.channel.members if not m.bot and host_role not in m.roles and role in m.roles]
+            if not participants:
+                await self.config.guild(guild).is_active.set(False)
             if len(participants) == 1:
                 winner = participants[0]
                 await self.config.guild(guild).is_active.set(False)
                 win_embed = discord.Embed(title="🏆 Winner!", description=f"{winner.mention} is the last to leave!", color=discord.Color.gold())
-                await announce_chan.send(embed=win_embed)
+                await winner.remove_roles(role)
+                if announce_chan:
+                    await announce_chan.send(embed=win_embed)
 
 async def setup(bot):
     await bot.add_cog(LastToLeave(bot))
