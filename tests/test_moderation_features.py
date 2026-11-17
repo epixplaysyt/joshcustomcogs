@@ -42,6 +42,7 @@ async def appeal_case(make_cog, kind='ban', **details):
     channel = SimpleNamespace(id=10, send=AsyncMock(return_value=SimpleNamespace(id=502)))
     g.get_channel.return_value = channel
     await cog.config.guild(g).appeal_channel.set(channel.id)
+    cog._has_level_member = AsyncMock(return_value=True)
     punishment_id = await cog.record_punishment(g, user, kind, reviewer, 'Test reason', **details)
     return cog, g, user, reviewer, channel, punishment_id
 
@@ -347,3 +348,29 @@ async def test_modlog_uses_exact_custom_duration(make_cog, monkeypatch):
     await cog.log_immediate_action(guild(), 'Tempban', SimpleNamespace(id=42), staff(1), 'Reason', 'None Provided', duration_seconds=1800)
     difference = (create_case.call_args.kwargs['until'] - before).total_seconds()
     assert 1799 <= difference <= 1802
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('accepted,level,allowed', [(True, 3, False), (True, 4, True), (True, 5, True), (False, 3, True), (False, 2, False)])
+async def test_manager_clearance_for_appeal_acceptance(make_cog, accepted, level, allowed):
+    from AdvancedMod.appeals import AppealReviewView
+    cog = make_cog('AdvancedMod.advmod')
+    cog._has_level_member = AsyncMock(side_effect=lambda guild, user, required: level >= required)
+    cog.review_appeal = AsyncMock(return_value='Saved')
+    view = AppealReviewView(cog)
+    i = interaction(guild())
+    i.user.mention = '<@42>'
+    await view.decide(i, accepted)
+    assert cog.review_appeal.await_count == int(allowed)
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_class_three_acceptance(make_cog):
+    cog, g, user, reviewer, _, case = await appeal_case(make_cog, ban_reason='Original')
+    await cog.submit_appeal(g.id, case, user.id, [('Why?', 'Answer')])
+    cog._has_level_member = AsyncMock(side_effect=lambda guild, user, required: required <= 3)
+    g.unban = AsyncMock()
+    with pytest.raises(ValueError, match='Manager'):
+        await cog.review_appeal(g, 502, reviewer, True)
+    g.unban.assert_not_awaited()
+    assert (await cog.config.guild(g).appeal_requests())[case]['status'] == 'pending'
