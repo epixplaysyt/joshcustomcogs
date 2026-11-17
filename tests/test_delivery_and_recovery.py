@@ -100,11 +100,12 @@ async def test_ticket_migration_preserves_source_on_copy_failure(make_cog):
 async def test_anonymous_ticket_reply_has_no_staff_profile_link(make_cog):
     cog = make_cog('ticketmail.ticketmail')
     g = guild()
-    channel = SimpleNamespace(id=10, guild=g, send=AsyncMock())
+    channel = SimpleNamespace(id=10, guild=g, send=AsyncMock(), permissions_for=lambda member: discord.Permissions.all())
     await cog.config.channel(channel).owner_ids.set([42])
     user = SimpleNamespace(send=AsyncMock())
     cog.bot.get_user.return_value = user
     author = SimpleNamespace(id=56, display_name='Moderator', display_avatar=SimpleNamespace(url='https://example.com/avatar.png'))
+    g.get_member.return_value = SimpleNamespace(id=56, display_name='Moderator', top_role=SimpleNamespace(name='Staff'), guild_permissions=discord.Permissions(manage_messages=True))
     await cog._execute_staff_reply_action(channel, author, 'test', True, [])
     embed = user.send.call_args.kwargs['embed']
     assert embed.author.name == 'Support Team'

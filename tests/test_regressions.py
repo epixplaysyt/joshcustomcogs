@@ -74,7 +74,7 @@ async def test_ticket_staff_permissions(make_cog, allowed, expected):
     assert await cog._check_staff_interaction(interaction(guild(), allowed)) is expected
     assert not await cog._check_staff_interaction(interaction(guild(2), True))
     assert not await cog._check_staff_interaction(interaction(None, True))
-    assert cog.ticket_group.default_permissions.manage_messages
+    assert cog.ticket_group.default_permissions.view_channel
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_transcript_escapes_message_and_metadata(make_cog):
     cog = make_cog('ticketmail.ticketmail')
     g = guild()
     async def history(**kwargs):
-        yield SimpleNamespace(author=SimpleNamespace(id=42, name='<b>User</b>', bot=False, display_avatar=SimpleNamespace(url='https://example.com/avatar.png')), clean_content='<script>alert(1)</script>', created_at=discord.utils.utcnow(), attachments=[])
+        yield SimpleNamespace(author=SimpleNamespace(id=42, name='<b>User</b>', bot=False, display_avatar=SimpleNamespace(url='https://example.com/avatar.png')), clean_content='<script>alert(1)</script>', created_at=discord.utils.utcnow(), attachments=[], embeds=[])
     channel = SimpleNamespace(id=10, guild=g, name='<b>Channel</b>', history=history)
     file = await cog._generate_html_transcript(channel, '<b>User</b>', 'Staff', '<img src=x onerror=alert(1)>', 'G1001')
     html = file.fp.getvalue().decode()
