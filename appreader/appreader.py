@@ -1,4 +1,5 @@
 import csv
+import uuid
 import io
 import asyncio
 import discord
@@ -202,7 +203,15 @@ class AppReaderView(discord.ui.View):
             if not saved_apps or self.current_index >= len(saved_apps):
                 return await interaction.response.send_message("Application data is out of sync. Please restart the viewer.", ephemeral=True)
             
-            target_app = saved_apps[self.current_index]
+            selected = self.applications[self.current_index]
+            application_id = selected.get("application_id")
+            matches = [a for a in saved_apps if (
+                a.get("application_id") == application_id if application_id else
+                (a.get("discord_username") or "").casefold() == (selected.get("discord_username") or "").casefold()
+            )]
+            if len(matches) != 1:
+                return await interaction.response.send_message("Application data changed. Please restart the viewer.", ephemeral=True)
+            target_app = matches[0]
             
             if user_id in target_app["votes"]:
                 target_app["votes"].remove(user_id)
@@ -212,7 +221,7 @@ class AppReaderView(discord.ui.View):
                     return await interaction.response.send_message(f"You have already reached your maximum of {max_votes} votes for this department.", ephemeral=True)
                 target_app["votes"].append(user_id)
             
-            self.applications = saved_apps
+            selected["votes"] = list(target_app["votes"])
 
         self.update_buttons_and_components()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
@@ -412,6 +421,7 @@ class ScoreMailer(commands.Cog):
             app_data = list(col_map.values())
             if any(item["answer"] for item in app_data):
                 applications.append({
+                    "application_id": uuid.uuid4().hex,
                     "discord_username": discord_username,
                     "total_score": total_score,
                     "q_and_a": app_data,
@@ -515,14 +525,16 @@ class ScoreMailer(commands.Cog):
             app_data = list(col_map.values())
             if any(item["answer"] for item in app_data):
                 transferred_votes = []
-                if valid_app_index < len(old_apps):
-                    transferred_votes = old_apps[valid_app_index].get("votes", [])
-                    preserved_votes += len(transferred_votes)
+                matching_apps = [a for a in old_apps if (a.get("discord_username") or "").casefold() == discord_username.casefold()]
+                previous = matching_apps[0] if len(matching_apps) == 1 and discord_username else {}
+                transferred_votes = list(previous.get("votes", []))
+                preserved_votes += len(transferred_votes)
                     
                 applications.append({
                     "discord_username": discord_username,
                     "total_score": total_score,
                     "q_and_a": app_data,
+                    "application_id": previous.get("application_id") or uuid.uuid4().hex,
                     "votes": transferred_votes 
                 })
                 valid_app_index += 1
@@ -534,7 +546,7 @@ class ScoreMailer(commands.Cog):
             dept_config[dept_key]["apps"] = applications
             dept_config[dept_key]["csv_text"] = text
         
-        msg = f"✅ Successfully replaced **{len(applications)}** applications for **{department}** while preserving **{preserved_votes}** votes based on their row order."
+        msg = f"✅ Successfully replaced **{len(applications)}** applications for **{department}** while preserving **{preserved_votes}** votes matched by candidate username."
         new_apps_count = max(0, len(applications) - len(old_apps))
         if new_apps_count > 0:
             msg += f"\n➕ Added **{new_apps_count}** new applications from the bottom rows."
