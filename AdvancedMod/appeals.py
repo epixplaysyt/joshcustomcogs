@@ -71,8 +71,10 @@ class AppealReviewView(discord.ui.View):
         self.cog = cog
 
     async def decide(self, interaction, accepted):
-        if not interaction.guild or not await self.cog._has_level_member(interaction.guild, interaction.user, 3):
-            return await interaction.response.send_message("Class III or higher is required to review appeals.", ephemeral=True)
+        required_level = 4 if accepted else 3
+        if not interaction.guild or not await self.cog._has_level_member(interaction.guild, interaction.user, required_level):
+            message = "Manager clearance is required to accept appeals." if accepted else "Class III or higher is required to deny appeals."
+            return await interaction.response.send_message(message, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         try:
             result = await self.cog.review_appeal(interaction.guild, interaction.message.id, interaction.user, accepted)
@@ -195,6 +197,9 @@ class AppealsMixin:
         return user, f"Your {record['kind']} appeal in **{guild.name}** was accepted. The punishment has been removed."
 
     async def review_appeal(self, guild, message_id, reviewer, accepted):
+        required_level = 4 if accepted else 3
+        if not await self._has_level_member(guild, reviewer, required_level):
+            raise ValueError("Manager clearance is required to accept appeals." if accepted else "Class III or higher is required to deny appeals.")
         async with self._appeal_lock:
             requests = await self.config.guild(guild).appeal_requests()
             punishment_id = next((key for key, item in requests.items() if item["message_id"] == message_id), None)

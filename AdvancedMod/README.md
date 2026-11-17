@@ -19,7 +19,7 @@ The duration field accepts free text:
 DM appeals
 ----------
 
-Configure the review channel with `[p]advmodset appealschannel #appeals`. Users then receive an **Appeal punishment** button in DMs for appealable warnings, timeouts, kicks and bans. The button opens a form, and its answers are posted to the configured channel with **Accept appeal** and **Deny appeal** buttons. Class III staff or higher can review it.
+Configure the review channel with `[p]advmodset appealschannel #appeals`. Users then receive an **Appeal punishment** button in DMs for appealable warnings, timeouts, kicks and bans. The button opens a form, and its answers are posted to the configured channel with **Accept appeal** and **Deny appeal** buttons. Managers and higher can accept appeals. Class III staff and higher can deny them.
 
 - `[p]advmodset appealquestion <1–5> <question>` changes a question or appends the next question. Questions are limited to 45 characters; answers are limited to 1,000 characters each.
 - `[p]advmodset appealdelay 0` enables immediate appeals. A custom duration sets a waiting period instead.
