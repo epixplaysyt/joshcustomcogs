@@ -29,6 +29,15 @@ class ManagerApprovalView(discord.ui.View):
         self.win_cd = win_cd
         self.messages = []
 
+    async def interaction_check(self, interaction):
+        member = self.interaction.guild.get_member(interaction.user.id)
+        role_id = await self.cog.config.guild(self.interaction.guild).role_manager()
+        return member is not None and (member.guild_permissions.administrator or any(r.id == role_id for r in member.roles))
+
+    async def on_timeout(self):
+        self.cog.pending_requests.discard(self.interaction.guild.id)
+        await self.disable_all()
+
     async def disable_all(self):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
@@ -169,16 +178,19 @@ class Guesses(commands.Cog):
         ]
     )
     async def guessopen(self, interaction: discord.Interaction, answer: str, auto_mark: bool = True, regular_cooldown: int = 120, winner_cooldown: int = 30):
+        if not interaction.guild:
+            return await interaction.response.send_message("Use this command in a server.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         config_data = await self.config.guild(guild).all()
         
         channel_id = config_data["guess_channel_id"]
         if not channel_id:
-            return await interaction.response.send_message("The guess channel hasn't been configured yet.", ephemeral=True)
+            return await interaction.followup.send("The guess channel hasn't been configured yet.", ephemeral=True)
         
         channel = guild.get_channel(channel_id)
         if not channel:
-            return await interaction.response.send_message("The configured guess channel no longer exists.", ephemeral=True)
+            return await interaction.followup.send("The configured guess channel no longer exists.", ephemeral=True)
 
         user_role_ids = [r.id for r in interaction.user.roles]
         host_role_id = config_data["role_host"]
@@ -190,17 +202,17 @@ class Guesses(commands.Cog):
         is_admin = interaction.user.guild_permissions.administrator
 
         if not (is_host or is_manager or is_admin):
-            return await interaction.response.send_message("You do not have permission to host a guessing session.", ephemeral=True)
+            return await interaction.followup.send("You do not have permission to host a guessing session.", ephemeral=True)
 
         if probation_role_id in user_role_ids:
             if guild.id in self.pending_requests:
-                return await interaction.response.send_message("A request is already pending approval from a manager.", ephemeral=True)
+                return await interaction.followup.send("A request is already pending approval from a manager.", ephemeral=True)
 
             manager_role = guild.get_role(manager_role_id)
             managers = manager_role.members if manager_role else []
             
             if not managers:
-                return await interaction.response.send_message("You are on probation, but no Managers could be found to approve this.", ephemeral=True)
+                return await interaction.followup.send("You are on probation, but no Managers could be found to approve this.", ephemeral=True)
             
             self.pending_requests.add(guild.id)
             view = ManagerApprovalView(self, interaction, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
@@ -220,16 +232,19 @@ class Guesses(commands.Cog):
 
             if not view.messages:
                 self.pending_requests.discard(guild.id)
-                return await interaction.response.send_message("Could not DM any managers. Please ask them to enable DMs.", ephemeral=True)
+                return await interaction.followup.send("Could not DM any managers. Please ask them to enable DMs.", ephemeral=True)
 
-            return await interaction.response.send_message(f"You are on probation. An approval request has been sent to {len(view.messages)} manager(s).", ephemeral=True)
+            return await interaction.followup.send(f"You are on probation. An approval request has been sent to {len(view.messages)} manager(s).", ephemeral=True)
 
         await self._open_guessing_channel(guild, channel, answer, auto_mark, regular_cooldown, winner_cooldown)
-        await interaction.response.send_message("Guessing channel unlocked!", ephemeral=True)
+        await interaction.followup.send("Guessing channel unlocked!", ephemeral=True)
 
     @app_commands.command(name="guessclose", description="Manually locks the guesses channel.")
     @app_commands.describe(answer="Optional: Override the correct answer if you made a typo when opening.")
     async def guessclose(self, interaction: discord.Interaction, answer: str = None):
+        if not interaction.guild:
+            return await interaction.response.send_message("Use this command in a server.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         config_data = await self.config.guild(guild).all()
         
@@ -239,21 +254,21 @@ class Guesses(commands.Cog):
         is_admin = interaction.user.guild_permissions.administrator
 
         if not (is_host or is_manager or is_admin):
-            return await interaction.response.send_message("You do not have permission to close the guessing channel.", ephemeral=True)
+            return await interaction.followup.send("You do not have permission to close the guessing channel.", ephemeral=True)
 
         channel_id = config_data["guess_channel_id"]
         channel = guild.get_channel(channel_id) if channel_id else None
         
         if not channel:
-            return await interaction.response.send_message("Could not find the configured guess channel.", ephemeral=True)
+            return await interaction.followup.send("Could not find the configured guess channel.", ephemeral=True)
 
         if not self.is_active:
-            return await interaction.response.send_message("The guessing channel is already closed.", ephemeral=True)
+            return await interaction.followup.send("The guessing channel is already closed.", ephemeral=True)
 
         final_answer = answer if answer else self.session_answer
 
         await self._close_guessing_channel(guild, channel, final_answer)
-        await interaction.response.send_message("Guessing channel locked successfully.", ephemeral=True)
+        await interaction.followup.send("Guessing channel locked successfully.", ephemeral=True)
 
     @commands.group(name="guessset")
     @commands.admin_or_permissions(manage_guild=True)
