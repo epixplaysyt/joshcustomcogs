@@ -1,0 +1,7 @@
+{
+    "author": ["Josh"],
+    "name": "ServerGuard",
+    "short": "Detect suspicious images and invite spam.",
+    "requirements": ["Pillow", "ImageHash", "aiohttp"],
+    "end_user_data_statement": "Temporarily stores user and channel IDs in memory to score recent suspicious messages."
+}
