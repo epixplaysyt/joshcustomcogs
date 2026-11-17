@@ -150,18 +150,20 @@ class BuilderActionView(discord.ui.View):
         self.stop()
 
 class DynamicBoardSelect(discord.ui.Select):
-    def __init__(self, boards: dict):
+    def __init__(self, boards: dict, cog=None):
         options = []
         for name, data in list(boards.items())[:25]: # Hard limit 25 options
             desc = data.get("description", "")[:100]
             options.append(discord.SelectOption(label=name, description=desc, value=name))
             
-        super().__init__(placeholder="Select a topic to view...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Select a topic to view...", min_values=1, max_values=1, options=options, custom_id="infoboard_select")
         self.boards = boards
+        self.cog = cog
 
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
-        data = self.boards.get(selected)
+        boards = await self.cog.config.guild(interaction.guild).boards() if self.cog else self.boards
+        data = boards.get(selected)
         
         if not data:
             return await interaction.response.send_message("❌ This board data could not be found.", ephemeral=True)
@@ -178,9 +180,9 @@ class DynamicBoardSelect(discord.ui.Select):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class DynamicBoardView(discord.ui.View):
-    def __init__(self, boards: dict):
+    def __init__(self, boards: dict, cog=None):
         super().__init__(timeout=None)
-        self.add_item(DynamicBoardSelect(boards))
+        self.add_item(DynamicBoardSelect(boards, cog))
 
 class InfoBoard(commands.Cog):
     """Dynamic Information Board System"""
@@ -189,6 +191,9 @@ class InfoBoard(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=8374928374, force_registration=True)
         self.config.register_guild(boards={})
+
+    async def cog_load(self):
+        self.bot.add_view(DynamicBoardView({}, self))
 
     @commands.group(name="infoboard", aliases=["ib"])
     @commands.guild_only()
@@ -262,7 +267,7 @@ class InfoBoard(commands.Cog):
         for field in data.get("fields", []):
             embed.add_field(name=field["name"], value=field["value"], inline=field.get("inline", False))
 
-        view = DynamicBoardView(boards)
+        view = DynamicBoardView(boards, self)
         await ctx.send(embed=embed, view=view)
 
 async def setup(bot):
