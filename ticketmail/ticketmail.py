@@ -64,6 +64,16 @@ class Modmail(commands.Cog):
         except Exception:
             pass
 
+    async def _check_staff_interaction(self, interaction: discord.Interaction) -> bool:
+        staff_guild_id = await self.config.default_guild_id()
+        if not interaction.guild or (staff_guild_id and interaction.guild.id != staff_guild_id):
+            await interaction.response.send_message("Use this command in the staff server.", ephemeral=True)
+            return False
+        if not interaction.permissions.manage_messages and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            return False
+        return True
+
     async def _get_main_guild(self, guild: discord.Guild) -> discord.Guild:
         main_guild_id = await self.config.guild(guild).main_guild_id()
         if main_guild_id:
@@ -1043,6 +1053,8 @@ class Modmail(commands.Cog):
         
         if not target_ids:
             return
+        if not message.author.guild_permissions.manage_messages and not await self.bot.is_owner(message.author):
+            return
 
         clean_content = message.content
         lower_content = clean_content.lower()
@@ -1329,11 +1341,13 @@ class Modmail(commands.Cog):
                     except Exception:
                         pass
 
-    ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets")
+    ticket_group = app_commands.Group(name="modmail", description="Commands for managing modmail tickets", guild_only=True, default_permissions=discord.Permissions(manage_messages=True))
 
     @ticket_group.command(name="open", description="Open a ticket for a specific user.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_open(self, interaction: discord.Interaction, user: discord.User):
+        if not await self._check_staff_interaction(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
 
         default_guild_id = await self.config.default_guild_id()
@@ -1352,6 +1366,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(user_ids="Space-separated list of user IDs")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_group_cmd(self, interaction: discord.Interaction, user_ids: str):
+        if not await self._check_staff_interaction(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
 
         default_guild_id = await self.config.default_guild_id()
@@ -1383,6 +1399,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(limit="Number of recent messages to load (default 50, max 200).")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_loadmessages(self, interaction: discord.Interaction, limit: int = 50):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1431,6 +1449,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(message="The message to send to the user(s).", anonymous="Send anonymously as Support Team?")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_reply_cmd(self, interaction: discord.Interaction, message: str, anonymous: bool = False):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1456,6 +1476,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(user_id="The User ID or mention of the user to send the message to.", message="The message content.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_replyto_cmd(self, interaction: discord.Interaction, user_id: str, message: str):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids() or []
         try:
             clean_id = int(user_id.strip("<@!>"))
@@ -1501,6 +1523,8 @@ class Modmail(commands.Cog):
     @ticket_group.command(name="claim", description="Claim this ticket to show you are handling it.")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_claim(self, interaction: discord.Interaction):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         if not owner_ids and not legacy_id:
@@ -1518,6 +1542,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(silent="Perform escalation silently without channel announcements?")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_escalate(self, interaction: discord.Interaction, silent: bool = False):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1557,6 +1583,8 @@ class Modmail(commands.Cog):
     @app_commands.describe(department="The name of the department to move this ticket to.", silent="Move silently without notifying user?")
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_transfer(self, interaction: discord.Interaction, department: str, silent: bool = False):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -1637,6 +1665,8 @@ class Modmail(commands.Cog):
         private: bool = False,
         silent: bool = False
     ):
+        if not await self._check_staff_interaction(interaction):
+            return
         owner_ids = await self.config.channel(interaction.channel).owner_ids()
         legacy_id = await self.config.channel(interaction.channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
