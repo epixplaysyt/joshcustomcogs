@@ -256,7 +256,7 @@ class Modmail(commands.Cog):
                     channel = guild.get_channel(channel_id)
                     if channel:
                         try:
-                            closed = await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"], data.get("private", False))
+                            closed = await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"], data.get("private", False), data.get("silent", False))
                             if not closed:
                                 continue
                         except discord.HTTPException:
@@ -842,7 +842,7 @@ class Modmail(commands.Cog):
         transcript_file = io.BytesIO(html.encode('utf-8'))
         return discord.File(transcript_file, filename=f"transcript_{ticket_id}.html")
 
-    async def _execute_close(self, channel: discord.TextChannel, reason: str, anonymous: bool, closer_id: int, private: bool = False):
+    async def _execute_close(self, channel: discord.TextChannel, reason: str, anonymous: bool, closer_id: int, private: bool = False, silent: bool = False):
         owner_ids = await self.config.channel(channel).owner_ids()
         legacy_id = await self.config.channel(channel).owner_id()
         target_ids = owner_ids if owner_ids else ([legacy_id] if legacy_id else [])
@@ -956,7 +956,7 @@ class Modmail(commands.Cog):
 
         for uid in target_ids:
             user = self.bot.get_user(uid)
-            if user:
+            if user and not silent:
                 try:
                     date_str = closed_at.strftime('%Y-%m-%d %I:%M %p UTC')
                     user_embed = discord.Embed(
@@ -1684,12 +1684,13 @@ class Modmail(commands.Cog):
                     "reason": reason,
                     "anon": anonymous,
                     "closer_id": interaction.user.id,
-                    "private": private
+                    "private": private,
+                    "silent": silent
                 }
 
             for uid in target_ids:
                 user = self.bot.get_user(uid)
-                if user:
+                if user and not silent:
                     try:
                         warning_embed = discord.Embed(
                             title="⏳ Ticket Auto-Close Warning",
@@ -1705,14 +1706,11 @@ class Modmail(commands.Cog):
             await interaction.response.send_message(f"✅ Ticket scheduled to close in **{delay_hours} hours** if no user response.{priv_note}", ephemeral=False)
             return
 
-        if silent:
-            pass
-
         await interaction.response.send_message(
             embed=discord.Embed(description="🔒 Closing ticket and archiving transcript...", color=discord.Color.red()), 
             ephemeral=True
         )
-        await self._execute_close(interaction.channel, reason, anonymous, interaction.user.id, private)
+        await self._execute_close(interaction.channel, reason, anonymous, interaction.user.id, private, silent)
 
     @commands.group(name="modmailset")
     @commands.admin_or_permissions(manage_guild=True)

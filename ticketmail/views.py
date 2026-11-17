@@ -222,7 +222,7 @@ class UserCloseConfirmationView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content="🔒 **Ticket closed successfully.**", view=self)
-        await self.cog._execute_close(self.channel, reason="Closed by user request", anonymous=False, closer_id=self.user.id)
+        await self.cog._user_initiated_close(self.user, self.channel)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
