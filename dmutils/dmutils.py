@@ -218,6 +218,7 @@ class DMUtils(commands.Cog):
         await ctx.send(f"🔒 Conversation `#{conv_id}` has been disconnected. No further messages will be forwarded.")
 
     @commands.hybrid_command(name="search")
+    @commands.admin_or_permissions(manage_messages=True)
     @commands.guild_only()
     @app_commands.describe(search_id="The unique verification ID starting with P (Prize) or M (Message)")
     async def search(self, ctx: commands.Context, search_id: str):
@@ -285,7 +286,7 @@ class DMUtils(commands.Cog):
         # Explicit plaintext exit check if they type stop instead of running the command structure
         if message.content.strip().lower() == "stop":
             ctx = await self.bot.get_context(message)
-            await self.bot.invoke(ctx)
+            await self.user_stop.callback(self, ctx)
             return
 
         staff_member = self.bot.get_user(session_data["staff_id"])
