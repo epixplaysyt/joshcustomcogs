@@ -287,6 +287,9 @@ class Modmail(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         for guild in self.bot.guilds:
+            main_guild = await self._get_main_guild(guild)
+            if member.guild.id != main_guild.id:
+                continue
             for channel in guild.text_channels:
                 owner_ids = await self.config.channel(channel).owner_ids()
                 legacy_id = await self.config.channel(channel).owner_id()
@@ -371,10 +374,14 @@ class Modmail(commands.Cog):
             if target_ids:
                 guild = self.bot.get_guild(payload.guild_id)
                 member = payload.member or (guild.get_member(payload.user_id) if guild else None)
-                if member and member.bot:
+                if not member or member.bot:
+                    return
+                if not member.guild_permissions.manage_messages and not await self.bot.is_owner(member):
                     return
                 
-                role_name = member.top_role.name if member else "Staff"
+                main_guild = await self._get_main_guild(channel.guild)
+                main_member = main_guild.get_member(payload.user_id)
+                role_name = main_member.top_role.name if main_member else "Staff"
                 emoji_str = str(payload.emoji)
                 now = datetime.datetime.now(datetime.timezone.utc)
                 date_time_str = now.strftime('%Y-%m-%d %I:%M %p UTC')
@@ -540,11 +547,6 @@ class Modmail(commands.Cog):
 
         main_guild = await self._get_main_guild(guild)
         member = main_guild.get_member(user.id)
-        if not member:
-            for g in self.bot.guilds:
-                if g.get_member(user.id):
-                    member = g.get_member(user.id)
-                    break
         role_name = member.top_role.name if member else "User"
 
         embed = discord.Embed(
@@ -954,6 +956,7 @@ class Modmail(commands.Cog):
                 embed.set_footer(text=f"Archive Date: {date_str}")
                 await log_channel.send(embed=embed, file=transcript_file)
 
+        await channel.delete(reason=f"Modmail closure by {closer_display}")
         for uid in target_ids:
             user = self.bot.get_user(uid)
             if user and not silent:
@@ -972,7 +975,6 @@ class Modmail(commands.Cog):
                     pass
             await self.config.user_from_id(uid).active_channel_id.set(None)
         
-        await channel.delete(reason=f"Modmail closure by {closer_display}")
         await self.config.channel(channel).clear()
         return True
 
