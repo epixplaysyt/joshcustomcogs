@@ -93,18 +93,14 @@ class AppReaderView(discord.ui.View):
                 
             chunk += "\n"
             
-            if len(current_description) + len(chunk) > 3900:
-                if current_description:
+            while chunk:
+                available = 3900 - len(current_description)
+                current_description += chunk[:available]
+                chunk = chunk[available:]
+                if len(current_description) == 3900:
                     pages.append(current_description.strip())
-                
-                if len(chunk) > 3900:
-                    pages.append(chunk[:3900])
-                    current_description = chunk[3900:]
-                else:
-                    current_description = chunk
-            else:
-                current_description += chunk
-                
+                    current_description = ""
+
         if current_description:
             pages.append(current_description.strip())
             
