@@ -255,7 +255,12 @@ class Modmail(commands.Cog):
                     channel_id = int(channel_id_str)
                     channel = guild.get_channel(channel_id)
                     if channel:
-                        await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"], data.get("private", False))
+                        try:
+                            closed = await self._execute_close(channel, data["reason"], data["anon"], data["closer_id"], data.get("private", False))
+                            if not closed:
+                                continue
+                        except discord.HTTPException:
+                            continue
                     to_remove.append(channel_id_str)
                     
             if to_remove:
@@ -921,11 +926,18 @@ class Modmail(commands.Cog):
                     priv_embed.set_footer(text=f"Closed Date: {closed_at.strftime('%Y-%m-%d %I:%M %p UTC')}")
                     await closer.send(embed=priv_embed, file=transcript_file)
                 except discord.Forbidden:
-                    pass
+                    await channel.send("Transcript delivery failed. The ticket has been preserved.")
+                    return False
+            else:
+                await channel.send("Transcript recipient could not be found. The ticket has been preserved.")
+                return False
         else:
             log_channel_id = await self.config.guild(channel.guild).log_channel_id()
             log_channel = channel.guild.get_channel(log_channel_id) if log_channel_id else None
             
+            if not log_channel:
+                await channel.send("Configure an archive channel before closing this ticket.")
+                return False
             if log_channel:
                 date_str = closed_at.strftime('%Y-%m-%d %I:%M %p UTC')
                 embed = discord.Embed(
@@ -960,8 +972,9 @@ class Modmail(commands.Cog):
                     pass
             await self.config.user_from_id(uid).active_channel_id.set(None)
         
-        await self.config.channel(channel).clear()
         await channel.delete(reason=f"Modmail closure by {closer_display}")
+        await self.config.channel(channel).clear()
+        return True
 
     async def _execute_staff_reply_action(self, channel: discord.TextChannel, author: discord.User, content: str, anonymous: bool, attachments: list, specific_target_id: int = None):
         owner_ids = await self.config.channel(channel).owner_ids()
