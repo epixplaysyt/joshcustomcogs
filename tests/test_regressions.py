@@ -17,6 +17,7 @@ from redbot.core._drivers.json import JsonDriver
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 COGS = {
+    'modmailerviewer.viewer': 'ModmailerViewer',
     'AdvancedMod.advmod': 'AdvancedMod', 'appreader.appreader': 'ScoreMailer',
     'autorole.roleautomation': 'RoleAutomation', 'components.compsender': 'JsonEmbeds',
     'dmutils.dmutils': 'DMUtils', 'dynaboard.dynaboard': 'InfoBoard',
