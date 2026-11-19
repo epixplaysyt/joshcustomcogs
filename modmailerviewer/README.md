@@ -6,6 +6,10 @@ A small aiohttp server hosted by the bot. The sidebar lists up to 50 recent tran
 Setup
 -----
 
+Run `[p]viewerset setup` without arguments in the staff server for the owner-only setup guide. It asks for the archive channel, hosting mode, listener port and public address, then explains network setup, the exact Discord OAuth redirect and private API token setup. It checks that credentials are present before asking for a final `yes` to save and start. Type `cancel` at any prompt; each reply has a three-minute timeout. The guide does not collect secrets in chat, install a reverse proxy, open firewall ports or verify public connectivity. If the listener cannot start, previous settings are restored.
+
+The existing command with arguments remains available for direct configuration. Manual steps:
+
 1. Install and load `modmailerviewer` alongside Ticketmail.
 2. Create a Discord application in the Discord Developer Portal. In OAuth2, add an exact redirect URL such as `https://tickets.example.com/oauth/callback`.
 3. Set the application credentials using Red's owner-only API token setup: `[p]set api modmailerviewer client_id YOUR_CLIENT_ID client_secret YOUR_CLIENT_SECRET`. Use a private channel or DM for credentials.

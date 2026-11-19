@@ -68,6 +68,7 @@ class ModmailerViewer(commands.Cog):
         self.http = None
         self._server_lock = asyncio.Lock()
         self.store = None
+        self._setup_running = False
 
     async def cog_load(self):
         await self.get_store().expire()
@@ -341,7 +342,12 @@ class ModmailerViewer(commands.Cog):
 
     @viewerset.command(name="setup")
     @commands.guild_only()
-    async def configure(self, ctx, channel: discord.TextChannel, public_url: str, port: commands.Range[int, 1024, 65535] = 8088, allow_http: bool = False):
+    async def configure(self, ctx, channel: discord.TextChannel = None, public_url: str = None, port: commands.Range[int, 1024, 65535] = 8088, allow_http: bool = False):
+        if channel is None and public_url is None:
+            from .setup import guided_setup
+            return await guided_setup(self, ctx)
+        if channel is None or public_url is None:
+            return await ctx.send("Run viewerset setup without arguments for the guide, or provide both the archive channel and URL.")
         try:
             origin = valid_origin(public_url, allow_http)
         except ValueError as exc:
@@ -351,6 +357,7 @@ class ModmailerViewer(commands.Cog):
         permissions = channel.permissions_for(ctx.guild.me)
         if not permissions.view_channel or not permissions.read_message_history:
             return await ctx.send("The bot needs View Channel and Read Message History in the archive channel.")
+        previous = await self.config.all()
         await self.config.staff_guild.set(ctx.guild.id)
         await self.config.archive_channel.set(channel.id)
         await self.config.public_url.set(origin)
@@ -359,14 +366,28 @@ class ModmailerViewer(commands.Cog):
         host = "127.0.0.1"
         try:
             address = ipaddress.ip_address(urlsplit(origin).hostname)
-            if not address.is_loopback and origin.startswith("http://"):
+            if address.is_loopback and address.version == 6:
+                host = "::1"
+            elif not address.is_loopback and origin.startswith("http://"):
                 host = "0.0.0.0" if address.version == 4 else "::"
         except ValueError:
             pass
         await self.config.host.set(host)
-        await self.start_server()
+        try:
+            await self.start_server()
+        except OSError:
+            for key, value in previous.items():
+                await self.config.get_attr(key).set(value)
+            if previous["public_url"]:
+                try:
+                    await self.start_server()
+                except OSError:
+                    pass
+            await ctx.send("The viewer could not bind to that address/port. Check whether the port is already in use and whether the host supports the address. Previous settings were restored; rerun setup with an available port.")
+            return False
         self.expiry_loop.restart()
         await ctx.send(f"Viewer started on {host}:{port}. Public URL: {origin}. OAuth redirect: {origin}/oauth/callback" + (" HTTP connections send session cookies without encryption; use a trusted network or HTTPS." if origin.startswith("http://") and host != "127.0.0.1" else ""))
+        return True
 
     @viewerset.command(name="stop")
     async def stop(self, ctx):
