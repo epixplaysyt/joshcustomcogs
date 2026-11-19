@@ -30,3 +30,12 @@ Accepting removes the original warning, clears the original timeout or unbans th
 Forms and reviews survive restarts. One appeal can be submitted per punishment. A superseded punishment or a ban/timeout changed by another moderation tool cannot be removed by an older appeal. Existing external appeal links remain available only for legacy punishment records; new cases use the DM forms.
 
 After updating, reload the cog and enable/sync the updated commands through Red. This removes the old `strictban` application command. Existing punishments are not automatically converted into new appeal cases.
+
+Evidence
+--------
+
+Image evidence appears inside moderation and request embeds. Discord image attachments are copied into the log when available (up to 10 MiB); signed attachment URLs are supported. Other image links show a preview, and Discord message/channel links show the channel and server. Original evidence links remain visible.
+
+Class I and higher can use `[p]addevidence <case number or log message link/ID> <evidence link>` or `/addevidence` with an attachment. For prefix commands, upload the attachment with the command. Log links/IDs must refer to the configured AdvancedMod log channel in the current server. Staff must be able to view the destination log channel.
+
+Additional evidence is posted as a reply to the original log with the submitting staff member's identity. For Red cases, the reason also gains the evidence and reply link. New AdvancedMod logs show their Red case number when case creation is enabled. Existing cases can use their Red log message; older AdvancedMod logs can be referenced by message link or ID. Original messages and attachments are preserved.

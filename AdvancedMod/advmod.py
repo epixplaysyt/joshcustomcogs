@@ -6,44 +6,12 @@ import datetime
 import time
 import uuid
 import typing
-import re
-import io
 from types import SimpleNamespace
 
 from .durations import parse_duration
 from .appeals import AppealsMixin, AppealEntryView, AppealReviewView, serialize_appeal_action
 
-DISCORD_MSG_LINK_REGEX = re.compile(
-    r"https?://(?:canary\.|ptb\.)?discord\.com/channels/(\d+)/(\d+)/(\d+)"
-)
-
-async def prepare_proof_delivery(proof: str) -> typing.Tuple[typing.Optional[str], typing.Optional[discord.File]]:
-    if not proof or proof == "None Provided":
-        return "None Provided", None
-    
-    match = DISCORD_MSG_LINK_REGEX.search(proof)
-    if match:
-        guild_id, channel_id, message_id = match.groups()
-        return f"[Message Link](https://discord.com/channels/{guild_id}/{channel_id}/{message_id}) (<#{channel_id}>)", None
-    
-    if proof.startswith("http://") or proof.startswith("https://"):
-        if any(proof.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
-            try:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(proof) as resp:
-                        if resp.status == 200:
-                            data = await resp.read()
-                            filename = proof.split("/")[-1].split("?")[0]
-                            if not filename:
-                                filename = "evidence.png"
-                            file = discord.File(io.BytesIO(data), filename=filename)
-                            return f"attachment://{filename}", file
-            except Exception:
-                pass
-        return f"<{proof}>", None
-    
-    return f"<{proof}>", None
+from .evidence import prepare_proof_delivery, add_proof_field, format_proof_link
 
 class BanConflictView(discord.ui.View):
     def __init__(self, cog, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], new_action_type: str, reason: str, proof: str, temp_duration: int = None, appealable: bool = True):
@@ -150,7 +118,7 @@ class DynamicRequestView(discord.ui.View):
         file_to_send = None
         if proof and proof != "None Provided":
             display_text, file_obj = await prepare_proof_delivery(proof)
-            log_embed.add_field(name="Proof / Evidence", value=display_text, inline=False)
+            add_proof_field(log_embed, proof, display_text, file_obj)
             file_to_send = file_obj
 
         if file_to_send:
@@ -202,6 +170,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
         
         default_guild = {
             "mod_channel": None,
+            "case_logs": {},
             "appeal_link": None,
             "base_mod_role": None,
             "class_1_role": None,
@@ -292,6 +261,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
             pass
 
     async def log_immediate_action(self, guild: discord.Guild, action: str, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], reason: str, proof: str, duration_minutes: int = None, duration_days: int = None, duration_str: str = None, appealable: bool = True, duration_seconds: int = None):
+        log_message = None
         channel_id = await self.config.guild(guild).mod_channel()
         if channel_id:
             channel = guild.get_channel(channel_id)
@@ -308,13 +278,13 @@ class AdvancedMod(AppealsMixin, commands.Cog):
                 file_to_send = None
                 if proof and proof != "None Provided":
                     display_text, file_obj = await prepare_proof_delivery(proof)
-                    embed.add_field(name="Proof / Evidence", value=display_text, inline=False)
+                    add_proof_field(embed, proof, display_text, file_obj)
                     file_to_send = file_obj
 
                 if file_to_send:
-                    await channel.send(embed=embed, file=file_to_send)
+                    log_message = await channel.send(embed=embed, file=file_to_send)
                 else:
-                    await channel.send(embed=embed)
+                    log_message = await channel.send(embed=embed)
 
         action_lower = action.lower()
         modlog_type = None
@@ -339,7 +309,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
 
         if modlog_type:
             try:
-                await modlog.create_case(
+                case = await modlog.create_case(
                     bot=self.bot,
                     guild=guild,
                     created_at=datetime.datetime.now(datetime.timezone.utc),
@@ -349,8 +319,83 @@ class AdvancedMod(AppealsMixin, commands.Cog):
                     reason=f"{reason} | Evidence: {proof} | Appealable: {appealable}",
                     until=until_time
                 )
+                if case and log_message:
+                    async with self.config.guild(guild).case_logs() as logs:
+                        logs[str(case.case_number)] = {"channel": channel_id, "message": log_message.id}
+                    embed.set_footer(text=f"Case #{case.case_number}")
+                    await log_message.edit(embed=embed)
             except Exception:
                 pass
+
+    @commands.hybrid_command(name="addevidence", description="[Class I+] Add evidence to a case number or moderation log link/ID.")
+    @commands.guild_only()
+    @serialize_appeal_action
+    async def add_evidence(self, ctx, reference: str, proof_link: str = None, attachment: discord.Attachment = None):
+        if not await self._has_level(ctx, 1):
+            return await ctx.send("Only Class I and higher can add evidence.", ephemeral=True)
+        if attachment is None and ctx.message and ctx.message.attachments:
+            attachment = ctx.message.attachments[0]
+        proof = self._get_proof(proof_link, attachment)
+        if proof == "None Provided" or len(proof) > 1000:
+            return await ctx.send("Provide an evidence link or attachment (links up to 1,000 characters).", ephemeral=True)
+        await ctx.defer(ephemeral=True)
+        from urllib.parse import urlsplit
+        case = None
+        log_message = None
+        try:
+            if reference.isdigit() and int(reference) < 10**15:
+                case = await modlog.get_case(int(reference), ctx.guild, self.bot)
+                entry = (await self.config.guild(ctx.guild).case_logs()).get(reference)
+                if entry:
+                    channel = ctx.guild.get_channel(entry["channel"])
+                    if channel:
+                        try:
+                            log_message = await channel.fetch_message(entry["message"])
+                        except discord.NotFound:
+                            pass
+                if log_message is None:
+                    log_message = case.message
+            else:
+                channel_id = await self.config.guild(ctx.guild).mod_channel()
+                message_id = reference
+                if not reference.isdigit():
+                    parts = urlsplit(reference)
+                    path = parts.path.strip("/").split("/")
+                    if parts.hostname not in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} or len(path) != 4 or path[0] != "channels" or path[1] != str(ctx.guild.id) or path[2] != str(channel_id):
+                        raise ValueError
+                    message_id = path[3]
+                channel = ctx.guild.get_channel(channel_id)
+                if not channel or not message_id.isdigit():
+                    raise ValueError
+                log_message = await channel.fetch_message(int(message_id))
+                if log_message.author.id != self.bot.user.id or not log_message.embeds or not (log_message.embeds[0].title or "").startswith(("⚡ Mod Action:", "✅ Mod Action:", "⏳ Pending Request:")):
+                    raise ValueError
+                for number, entry in (await self.config.guild(ctx.guild).case_logs()).items():
+                    if entry["channel"] == channel_id and entry["message"] == log_message.id:
+                        case = await modlog.get_case(int(number), ctx.guild, self.bot)
+                        break
+        except (ValueError, RuntimeError, discord.HTTPException):
+            return await ctx.send("Case or moderation log not found in this server.", ephemeral=True)
+        if not log_message:
+            return await ctx.send("That case has no available log message to attach evidence to.", ephemeral=True)
+        if not log_message.channel.permissions_for(ctx.author).view_channel:
+            return await ctx.send("You need access to the log channel to add evidence.", ephemeral=True)
+        embed = discord.Embed(title="Additional evidence", description=f"[Original log]({log_message.jump_url})", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+        embed.add_field(name="Added by", value=f"{ctx.author.mention} ({ctx.author.id})", inline=False)
+        display, file = await prepare_proof_delivery(proof)
+        try:
+            if attachment and file is None and attachment.size <= min(ctx.guild.filesize_limit, 10 * 1024 * 1024):
+                file = await attachment.to_file()
+            add_proof_field(embed, proof, display, file)
+            sent = await log_message.channel.send(embed=embed, reference=log_message, mention_author=False, allowed_mentions=discord.AllowedMentions.none(), **({"file": file} if file else {}))
+        except discord.HTTPException:
+            return await ctx.send("Evidence could not be posted. Check the bot's log-channel permissions.", ephemeral=True)
+        if case:
+            try:
+                await case.edit({"reason": f"{case.reason or ''}\nAdditional evidence by {ctx.author} ({ctx.author.id}): {proof} | Log: {sent.jump_url}", "amended_by": ctx.author, "modified_at": time.time()})
+            except Exception:
+                return await ctx.send(f"Evidence posted: {sent.jump_url}. The Red case could not be updated.", ephemeral=True)
+        await ctx.send(f"Evidence added: {sent.jump_url}", ephemeral=True)
 
     async def create_request(self, ctx: commands.Context, req_type: str, target: typing.Union[discord.Member, discord.User], reason: str, proof: str, ping_level: int, extra_data: dict = None, appealable: bool = True):
         channel_id = await self.config.guild(ctx.guild).mod_channel()
@@ -380,7 +425,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
         file_to_send = None
         if proof and proof != "None Provided":
             display_text, file_obj = await prepare_proof_delivery(proof)
-            embed.add_field(name="Proof / Evidence", value=display_text, inline=False)
+            add_proof_field(embed, proof, display_text, file_obj)
             file_to_send = file_obj
 
         if file_to_send:
@@ -551,12 +596,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
             timestamp = f"<t:{int(w['time'])}:F>"
             value = f"**Reason:** {w['reason']}\n**Moderator:** <@{w['mod']}>\n**Date:** {timestamp}"
             if w['proof'] != "None Provided":
-                m = DISCORD_MSG_LINK_REGEX.search(w['proof'])
-                if m:
-                    g_id, c_id, m_id = m.groups()
-                    value += f"\n**Proof Evidence:** [Message Link](https://discord.com/channels/{g_id}/{c_id}/{m_id}) (<#{c_id}>)"
-                else:
-                    value += f"\n**Proof Evidence:** <{w['proof']}>"
+                value += f"\n**Proof Evidence:** {format_proof_link(w['proof'])}"
             embed.add_field(name=f"Warning #{idx}", value=value, inline=False)
             
         await ctx.send(embed=embed)
