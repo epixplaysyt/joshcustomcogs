@@ -20,6 +20,29 @@ No domain is required. For access on a trusted network using a server IP, regist
 
 For internet access, use HTTPS with an IP address and a certificate/reverse proxy, or continue using an HTTPS hostname. A domain is optional. A loopback URL such as `http://localhost:8088` also works, including through an SSH tunnel; it does not require the HTTP opt-in. The OAuth redirect URL must exactly match the URL registered in the Discord Developer Portal. `[p]viewerset stop` stops the listener, invalidates sessions and disables automatic startup until setup is run again.
 
+IP reverse-proxy installer
+--------------------------
+
+On an Ubuntu/Debian systemd host, `scripts/install-nginx.sh` installs nginx and current Snap Certbot, obtains a Let's Encrypt certificate for a public IPv4 address, and configures nginx to proxy HTTPS to the bot on loopback. Run it on the same machine as the bot, outside containers. Python 3 must already be installed. The host must support Snap.
+
+Download/review the script, then preview its configuration without making changes:
+
+```bash
+bash install-nginx.sh --ip YOUR_PUBLIC_IPV4 --port 8088 --check
+```
+
+Install with:
+
+```bash
+sudo bash install-nginx.sh --ip YOUR_PUBLIC_IPV4 --email YOUR_EMAIL --port 8088
+```
+
+Replace the placeholders with your actual public IPv4 and email. The installer asks for confirmation and acceptance of Let's Encrypt's subscriber agreement. `--yes` skips that prompt for unattended installation. Private, reserved and IPv6 addresses are rejected by this installer.
+
+Allow public TCP 80 and 443 in your firewall/router before running it; the script does not change those rules. Keep port 80 reachable for renewal and keep the bot's viewer port private. IP certificates are short-lived, so the installer enables the Snap renewal timer, installs an nginx reload hook and tests renewal. The public URL and Discord callback URL are printed after success. Complete `[p]viewerset setup` using HTTPS proxy mode and those values. Bot credentials and cog settings are not changed by the script.
+
+Existing files under the dedicated `modmailerviewer-ip` nginx/certificate names are never overwritten. Other nginx sites remain enabled. On failure, installer-created nginx configuration and the reload hook are removed; installed packages and any issued certificate remain. Inspect the reported error and those retained files before retrying. On success, configuration is in `/etc/nginx/sites-available/modmailerviewer-ip`, certificates are in `/etc/letsencrypt/live/modmailerviewer-ip/`, and the reload hook is `/etc/letsencrypt/renewal-hooks/deploy/modmailerviewer-nginx`. Check renewal with `systemctl status snap.certbot.renew.timer`. Public reachability, a working Snap installation and live certificate issuance must be verified on the target host.
+
 Access
 ------
 
