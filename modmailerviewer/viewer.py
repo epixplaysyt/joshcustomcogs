@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import hashlib
+import datetime
+import ipaddress
 import io
 import re
 import secrets
@@ -12,7 +14,9 @@ from urllib.parse import urlencode, urlsplit
 import aiohttp
 import discord
 from aiohttp import web
-from redbot.core import Config, commands
+from redbot.core import Config, commands, data_manager
+from discord.ext import tasks
+from .storage import ArchiveStore, RETENTION
 
 
 COOKIE = "modmailer_session"
@@ -24,13 +28,19 @@ STYLE = """
 """
 
 
-def valid_origin(value):
+def valid_origin(value, allow_http=False):
     parsed = urlsplit(value)
+    parsed.port
     local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
         raise ValueError("Use the public origin without a path, query or credentials.")
-    if not parsed.hostname or (parsed.scheme != "https" and not (local and parsed.scheme == "http")):
-        raise ValueError("HTTPS is required, except for loopback development URLs.")
+    try:
+        ipaddress.ip_address(parsed.hostname or "")
+        numeric_ip = True
+    except ValueError:
+        numeric_ip = False
+    if not parsed.hostname or (parsed.scheme != "https" and not ((local or (numeric_ip and allow_http)) and parsed.scheme == "http")):
+        raise ValueError("Use HTTPS, a loopback HTTP URL, or an HTTP IP address with allow_http enabled.")
     return value.rstrip("/")
 
 
@@ -51,18 +61,22 @@ class ModmailerViewer(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=87391843271, force_registration=True)
-        self.config.register_global(staff_guild=None, archive_channel=None, public_url="", host="127.0.0.1", port=8088, recent_limit=50)
+        self.config.register_global(staff_guild=None, archive_channel=None, public_url="", host="127.0.0.1", port=8088, recent_limit=50, allow_http=False)
         self.sessions = {}
         self.states = {}
         self.runner = None
         self.http = None
         self._server_lock = asyncio.Lock()
+        self.store = None
 
     async def cog_load(self):
+        await self.get_store().expire()
+        self.expiry_loop.start()
         if await self.config.public_url():
             await self.start_server()
 
     async def cog_unload(self):
+        self.expiry_loop.cancel()
         await self.stop_server()
 
     async def red_delete_data_for_the_user(self, *, user_id, **kwargs):
@@ -77,7 +91,7 @@ class ModmailerViewer(commands.Cog):
         async with self._server_lock:
             await self.stop_server()
             settings = await self.config.all()
-            valid_origin(settings["public_url"])
+            valid_origin(settings["public_url"], settings["allow_http"])
             self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
             self.runner = web.AppRunner(self.make_app(), access_log=None)
             try:
@@ -139,7 +153,7 @@ class ModmailerViewer(commands.Cog):
         if len(self.states) >= 1000:
             raise web.HTTPServiceUnavailable(text="Too many sign-in attempts. Try again shortly.")
         tokens = await self.credentials()
-        origin = valid_origin(await self.config.public_url())
+        origin = valid_origin(await self.config.public_url(), await self.config.allow_http())
         state = secrets.token_urlsafe(32)
         browser = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(48)
@@ -159,7 +173,7 @@ class ModmailerViewer(commands.Cog):
         if len(self.sessions) >= 5000:
             raise web.HTTPServiceUnavailable(text="Too many active sessions.")
         tokens = await self.credentials()
-        origin = valid_origin(await self.config.public_url())
+        origin = valid_origin(await self.config.public_url(), await self.config.allow_http())
         try:
             async with self.http.post("https://discord.com/api/v10/oauth2/token", data=dict(client_id=tokens["client_id"], client_secret=tokens["client_secret"], grant_type="authorization_code", code=request.query["code"], redirect_uri=origin + "/oauth/callback", code_verifier=state["verifier"])) as response:
                 response.raise_for_status()
@@ -196,9 +210,60 @@ class ModmailerViewer(commands.Cog):
             return None
         return next((a for a in message.attachments if TRANSCRIPT.fullmatch(a.filename)), None)
 
+    def get_store(self):
+        if self.store is None:
+            self.store = ArchiveStore(data_manager.cog_data_path(self) / "transcripts.sqlite3")
+        return self.store
+
+    @tasks.loop(hours=1)
+    async def expiry_loop(self):
+        await self.get_store().expire()
+        await self.sync_archives()
+
+    async def sync_archives(self):
+        await self.bot.wait_until_red_ready()
+        settings = await self.config.all()
+        guild = self.bot.get_guild(settings["staff_guild"])
+        channel = guild.get_channel(settings["archive_channel"]) if guild else None
+        if not channel:
+            return
+        after = discord.utils.utcnow() - datetime.timedelta(days=28)
+        try:
+            async for message in channel.history(limit=None, after=after, oldest_first=True):
+                attachment = self.transcript_attachment(message)
+                if attachment and attachment.size <= MAX_ARCHIVE and not await self.get_store().get(channel.id, message.id):
+                    try:
+                        await self.save_message(channel.id, message, attachment)
+                    except discord.HTTPException:
+                        continue
+        except discord.HTTPException:
+            return
+
+    async def save_message(self, channel_id, message, attachment):
+        created = getattr(message, "created_at", discord.utils.utcnow()).timestamp()
+        if created + RETENTION <= time.time():
+            return None
+        data = await attachment.read()
+        if len(data) > MAX_ARCHIVE:
+            raise web.HTTPRequestEntityTooLarge(max_size=MAX_ARCHIVE, actual_size=len(data))
+        title = message.embeds[0].title if getattr(message, "embeds", None) else attachment.filename
+        await self.get_store().put(channel_id, message.id, attachment.filename, title or attachment.filename, created, data)
+        return data
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if not message.guild or message.channel.id != await self.config.archive_channel() or message.guild.id != await self.config.staff_guild():
+            return
+        attachment = self.transcript_attachment(message)
+        if attachment and attachment.size <= MAX_ARCHIVE:
+            await self.save_message(message.channel.id, message, attachment)
+
     async def get_archive(self, channel, value):
         if not value.isdigit():
             raise web.HTTPNotFound()
+        local = await self.get_store().get(channel.id, value)
+        if local:
+            return local["filename"], local["data"]
         try:
             message = await channel.fetch_message(int(value))
         except discord.NotFound:
@@ -208,23 +273,35 @@ class ModmailerViewer(commands.Cog):
             raise web.HTTPNotFound()
         if attachment.size > MAX_ARCHIVE:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_ARCHIVE, actual_size=attachment.size)
-        return message, attachment
+        data = await self.save_message(channel.id, message, attachment)
+        if data is None:
+            data = await attachment.read()
+        if len(data) > MAX_ARCHIVE:
+            raise web.HTTPRequestEntityTooLarge(max_size=MAX_ARCHIVE, actual_size=len(data))
+        return attachment.filename, data
 
     async def index(self, request):
         session, channel = await self.authorize(request)
         selected = request.match_info.get("message_id")
         rows = []
         limit = await self.config.recent_limit()
-        async for message in channel.history(limit=500):
-            attachment = self.transcript_attachment(message)
-            if not attachment:
-                continue
-            key = str(message.id)
-            label = attachment.filename.removeprefix("transcript_").rsplit(".", 1)[0]
-            title = message.embeds[0].title if message.embeds else label
-            rows.append(f'<a class="ticket {"active" if selected == key else ""}" href="/ticket/{key}"><strong><span class="hash">#</span>{escape(label)}</strong><small>{escape(title or label)}</small><small>{message.created_at.strftime("%d %b %Y · %H:%M UTC")}</small></a>')
-            if len(rows) >= limit:
-                break
+        entries = {item["message_id"]: item for item in await self.get_store().recent(channel.id, limit)}
+        try:
+            async for message in channel.history(limit=500):
+                attachment = self.transcript_attachment(message)
+                if not attachment:
+                    continue
+                key = str(message.id)
+                title = message.embeds[0].title if message.embeds else attachment.filename
+                entries[key] = dict(message_id=key, filename=attachment.filename, title=title, created=message.created_at.timestamp())
+        except discord.HTTPException:
+            if not entries:
+                raise web.HTTPServiceUnavailable(text="No local archives are available and Discord logs could not be read.")
+        for entry in sorted(entries.values(), key=lambda item: item["created"], reverse=True)[:limit]:
+            key = entry["message_id"]
+            label = entry["filename"].removeprefix("transcript_").rsplit(".", 1)[0]
+            date = datetime.datetime.fromtimestamp(entry["created"], datetime.timezone.utc).strftime("%d %b %Y · %H:%M UTC")
+            rows.append(f'<a class="ticket {"active" if selected == key else ""}" href="/ticket/{key}"><strong><span class="hash">#</span>{escape(label)}</strong><small>{escape(entry["title"] or label)}</small><small>{date}</small></a>')
         if selected:
             await self.get_archive(channel, selected)
             pane = f'<div class="toolbar"><span>Ticket archive</span><a href="/download/{selected}">Download original</a></div><iframe title="Ticket transcript" sandbox="allow-downloads" referrerpolicy="no-referrer" src="/content/{selected}"></iframe>'
@@ -236,11 +313,10 @@ class ModmailerViewer(commands.Cog):
 
     async def content(self, request):
         _, channel = await self.authorize(request)
-        _, attachment = await self.get_archive(channel, request.match_info["message_id"])
-        data = await attachment.read()
+        filename, data = await self.get_archive(channel, request.match_info["message_id"])
         if len(data) > MAX_ARCHIVE:
             raise web.HTTPBadRequest(text="Archive is too large.")
-        if attachment.filename.endswith(".zip"):
+        if filename.endswith(".zip"):
             try:
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     files = [item for item in archive.infolist() if re.fullmatch(r"transcript_[A-Za-z0-9_-]+\.html", item.filename)]
@@ -255,9 +331,8 @@ class ModmailerViewer(commands.Cog):
 
     async def download(self, request):
         _, channel = await self.authorize(request)
-        _, attachment = await self.get_archive(channel, request.match_info["message_id"])
-        data = await attachment.read()
-        return web.Response(body=data, content_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{attachment.filename}"'})
+        filename, data = await self.get_archive(channel, request.match_info["message_id"])
+        return web.Response(body=data, content_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @commands.group(name="viewerset")
     @commands.is_owner()
@@ -266,9 +341,9 @@ class ModmailerViewer(commands.Cog):
 
     @viewerset.command(name="setup")
     @commands.guild_only()
-    async def configure(self, ctx, channel: discord.TextChannel, public_url: str, port: commands.Range[int, 1024, 65535] = 8088):
+    async def configure(self, ctx, channel: discord.TextChannel, public_url: str, port: commands.Range[int, 1024, 65535] = 8088, allow_http: bool = False):
         try:
-            origin = valid_origin(public_url)
+            origin = valid_origin(public_url, allow_http)
         except ValueError as exc:
             return await ctx.send(str(exc))
         if channel.guild.id != ctx.guild.id:
@@ -280,8 +355,18 @@ class ModmailerViewer(commands.Cog):
         await self.config.archive_channel.set(channel.id)
         await self.config.public_url.set(origin)
         await self.config.port.set(port)
+        await self.config.allow_http.set(allow_http)
+        host = "127.0.0.1"
+        try:
+            address = ipaddress.ip_address(urlsplit(origin).hostname)
+            if not address.is_loopback and origin.startswith("http://"):
+                host = "0.0.0.0" if address.version == 4 else "::"
+        except ValueError:
+            pass
+        await self.config.host.set(host)
         await self.start_server()
-        await ctx.send(f"Viewer started on 127.0.0.1:{port}. Public URL: {origin}. OAuth redirect: {origin}/oauth/callback")
+        self.expiry_loop.restart()
+        await ctx.send(f"Viewer started on {host}:{port}. Public URL: {origin}. OAuth redirect: {origin}/oauth/callback" + (" HTTP connections send session cookies without encryption; use a trusted network or HTTPS." if origin.startswith("http://") and host != "127.0.0.1" else ""))
 
     @viewerset.command(name="stop")
     async def stop(self, ctx):

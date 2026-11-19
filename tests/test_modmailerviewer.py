@@ -158,7 +158,7 @@ async def test_zip_transcript_is_read_without_extracting_files(make_cog):
     with zipfile.ZipFile(data, 'w') as archive:
         archive.writestr('transcript_G1.html', '<html><head></head><body>Archived ticket</body></html>')
     attachment = SimpleNamespace(filename='transcript_G1.zip', size=len(data.getvalue()), read=AsyncMock(return_value=data.getvalue()))
-    channel.fetch_message = AsyncMock(return_value=SimpleNamespace(author=cog.bot.user, attachments=[attachment]))
+    channel.fetch_message = AsyncMock(return_value=SimpleNamespace(id=123, author=cog.bot.user, attachments=[attachment]))
     async with TestClient(TestServer(cog.make_app())) as client:
         response = await client.get('/content/123', headers={'Cookie': 'modmailer_session=test'})
         assert response.status == 200
@@ -220,3 +220,112 @@ async def test_successful_oauth_callback_creates_staff_session_without_saving_to
     assert post.call_args.kwargs['data']['code_verifier'] == 'verifier'
     assert 'private-token' not in str(cog.sessions)
     assert not cog.states
+
+
+@pytest.mark.parametrize('url', ['http://203.0.113.10:8088', 'http://[2001:db8::10]:8088'])
+def test_http_ip_requires_explicit_opt_in(url):
+    from modmailerviewer.viewer import valid_origin
+    with pytest.raises(ValueError):
+        valid_origin(url)
+    assert valid_origin(url, allow_http=True) == url
+    with pytest.raises(ValueError):
+        valid_origin('http://example.com', allow_http=True)
+
+
+@pytest.mark.asyncio
+async def test_disk_archive_survives_restart_and_expires_from_creation(tmp_path, monkeypatch):
+    from modmailerviewer.storage import ArchiveStore, RETENTION
+    monkeypatch.setattr('modmailerviewer.storage.time.time', lambda: 10000000)
+    store = ArchiveStore(tmp_path / 'archive.sqlite3')
+    created = 10000000 - RETENTION + 100
+    await store.put(10, 123, 'transcript_G1.html', 'Ticket', created, b'original')
+    reopened = ArchiveStore(store.path)
+    assert (await reopened.get(10, 123))['data'] == b'original'
+    assert 'data' not in (await reopened.recent(10, 50))[0]
+    monkeypatch.setattr('modmailerviewer.storage.time.time', lambda: 10000100)
+    await reopened.expire()
+    assert await reopened.get(10, 123) is None
+    await reopened.put(10, 123, 'transcript_G1.html', 'Ticket', created, b'expired')
+    assert await reopened.recent(10, 50) == []
+
+
+@pytest.mark.asyncio
+async def test_local_copy_precedes_discord_and_old_archive_falls_back_without_recaching(make_cog):
+    import datetime
+    from modmailerviewer.storage import RETENTION
+    cog, channel, _ = await viewer(make_cog)
+    await cog.store.put(10, 123, 'transcript_G1.html', 'Ticket', time.time(), b'local')
+    channel.fetch_message = AsyncMock()
+    assert await cog.get_archive(channel, '123') == ('transcript_G1.html', b'local')
+    channel.fetch_message.assert_not_awaited()
+    attachment = SimpleNamespace(filename='transcript_G2.html', size=7, read=AsyncMock(return_value=b'channel'))
+    channel.fetch_message.return_value = SimpleNamespace(id=456, author=cog.bot.user, attachments=[attachment], embeds=[], created_at=discord.utils.utcnow()-datetime.timedelta(seconds=RETENTION+1))
+    assert await cog.get_archive(channel, '456') == ('transcript_G2.html', b'channel')
+    assert await cog.store.get(10, 456) is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_stores_recent_bot_transcripts(make_cog):
+    cog, channel, _ = await viewer(make_cog)
+    cog.bot.wait_until_red_ready = AsyncMock()
+    attachment = SimpleNamespace(filename='transcript_G1.html', size=4, read=AsyncMock(return_value=b'html'))
+    async def history(**kwargs):
+        assert kwargs['after'] < discord.utils.utcnow()
+        yield SimpleNamespace(id=123, author=cog.bot.user, attachments=[attachment], embeds=[], created_at=discord.utils.utcnow())
+        yield SimpleNamespace(id=124, author=SimpleNamespace(id=1), attachments=[attachment])
+    channel.history = history
+    await cog.sync_archives()
+    assert (await cog.store.get(10, 123))['data'] == b'html'
+    assert await cog.store.get(10, 124) is None
+
+
+@pytest.mark.parametrize('url', ['https://tickets.example.com:99999', 'https://tickets.example.com:not-a-port', 'http://203.0.113.10:99999'])
+def test_invalid_origin_ports_are_rejected(url):
+    from modmailerviewer.viewer import valid_origin
+    with pytest.raises(ValueError):
+        valid_origin(url, allow_http=True)
+
+
+@pytest.mark.asyncio
+async def test_avatar_fetches_share_one_session_and_limit_concurrency(monkeypatch):
+    import ticketmail.transcripts as transcripts
+    sessions = []
+    active = 0
+    maximum = 0
+    class Session:
+        def __init__(self, **kwargs): sessions.append(self)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+    async def avatar(url, cache, session):
+        nonlocal active, maximum
+        assert session is sessions[0]
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0)
+        cache[url] = 'picture'
+        active -= 1
+    monkeypatch.setattr(transcripts.aiohttp, 'ClientSession', Session)
+    monkeypatch.setattr(transcripts, 'avatar_data', avatar)
+    urls = [str(i) for i in range(12)]
+    cache = {}
+    await transcripts.fetch_avatars(urls + urls, cache)
+    assert len(sessions) == 1 and maximum == 4 and len(cache) == 12
+
+
+@pytest.mark.asyncio
+async def test_avatar_budget_cancels_slow_fetches(monkeypatch):
+    import ticketmail.transcripts as transcripts
+    cancelled = []
+    async def slow(url, cache, session):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(url)
+    real_wait = asyncio.wait_for
+    async def short_wait(task, timeout):
+        assert timeout == 6
+        return await real_wait(task, timeout=0.01)
+    monkeypatch.setattr(transcripts, 'avatar_data', slow)
+    monkeypatch.setattr(transcripts.asyncio, 'wait_for', short_wait)
+    await transcripts.fetch_avatars(['a', 'b'], {})
+    assert sorted(cancelled) == ['a', 'b']

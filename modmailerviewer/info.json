@@ -4,5 +4,5 @@
     "short": "A Discord-authenticated browser for archived Modmail transcripts.",
     "requirements": ["aiohttp"],
     "min_bot_version": "3.5.24",
-    "end_user_data_statement": "Stores the staff guild, archive channel and web-server settings. Discord user IDs and login sessions are held temporarily in memory. Transcripts remain in the configured Discord archive channel."
+    "end_user_data_statement": "Stores the staff guild, archive channel and web-server settings. Transcript files and metadata are stored in a local SQLite database for 28 days from the Discord archive message creation time, then served from Discord logs instead. Discord user IDs and login sessions are held temporarily in memory. Channel-based archives are never deleted by this cog."
 }

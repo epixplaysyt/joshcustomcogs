@@ -46,7 +46,11 @@ def make_cog(monkeypatch, tmp_path):
             is_owner=AsyncMock(return_value=False), is_admin=AsyncMock(return_value=False),
             add_view=Mock(), user=SimpleNamespace(id=999, name='Bot', display_avatar=SimpleNamespace(url='https://example.com/avatar.png')),
         )
-        return getattr(importlib.import_module(module), COGS[module])(bot)
+        cog = getattr(importlib.import_module(module), COGS[module])(bot)
+        if module == "modmailerviewer.viewer":
+            from modmailerviewer.storage import ArchiveStore
+            cog.store = ArchiveStore(tmp_path / "archives.sqlite3")
+        return cog
     return create
 
 
