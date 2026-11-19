@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from .durations import parse_duration
 from .appeals import AppealsMixin, AppealEntryView, AppealReviewView, serialize_appeal_action
 
-from .evidence import prepare_proof_delivery, add_proof_field, format_proof_link
+from .evidence import prepare_proof_delivery, add_proof_field, format_proof_link, discord_link_path
 
 class BanConflictView(discord.ui.View):
     def __init__(self, cog, target: typing.Union[discord.Member, discord.User], moderator: typing.Union[discord.Member, discord.User], new_action_type: str, reason: str, proof: str, temp_duration: int = None, appealable: bool = True):
@@ -339,7 +339,6 @@ class AdvancedMod(AppealsMixin, commands.Cog):
         if proof == "None Provided" or len(proof) > 1000:
             return await ctx.send("Provide an evidence link or attachment (links up to 1,000 characters).", ephemeral=True)
         await ctx.defer(ephemeral=True)
-        from urllib.parse import urlsplit
         case = None
         log_message = None
         try:
@@ -361,9 +360,8 @@ class AdvancedMod(AppealsMixin, commands.Cog):
                 channel_id = await self.config.guild(ctx.guild).mod_channel()
                 message_id = reference
                 if not reference.isdigit():
-                    parts = urlsplit(reference)
-                    path = parts.path.strip("/").split("/")
-                    if parts.scheme not in {"http", "https"} or parts.port not in {None, {"http": 80, "https": 443}.get(parts.scheme)} or parts.username or parts.password or parts.hostname not in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} or len(path) != 4 or path[0] != "channels" or path[1] != str(ctx.guild.id) or path[2] != str(channel_id):
+                    path = discord_link_path(reference)
+                    if path is None or len(path) != 4 or path[1] != str(ctx.guild.id) or path[2] != str(channel_id):
                         raise ValueError
                     message_id = path[3]
                 channel = ctx.guild.get_channel(channel_id)

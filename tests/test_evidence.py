@@ -187,3 +187,22 @@ async def test_log_references_reject_untrusted_schemes_ports_and_credentials(mak
     await cog.add_evidence.callback(cog, ctx, origin + '/channels/1/10/123456789012345678', 'https://example.com/proof')
     g.get_channel.assert_not_called()
     assert 'not found' in ctx.send.call_args.args[0]
+
+
+@pytest.mark.parametrize('origin', ['https://discord.com:80', 'http://discord.com:443', 'https://discord.com:8080', 'https://discord.com:0', 'https://discord.com:65536', 'https://discord.com:invalid'])
+@pytest.mark.parametrize('path', ['1/2', '1/2/3'])
+def test_unexpected_ports_never_get_trusted_discord_formatting(origin, path):
+    from AdvancedMod.evidence import format_proof_link, discord_link_path
+    proof = f'{origin}/channels/{path}'
+    assert discord_link_path(proof) is None
+    formatted = format_proof_link(proof)
+    assert '[Message]' not in formatted and '[Channel]' not in formatted and '<#2>' not in formatted
+    assert origin in formatted
+
+
+@pytest.mark.parametrize('origin', ['http://discord.com', 'http://discord.com:80', 'https://discord.com', 'https://discord.com:443'])
+def test_expected_ports_are_trusted_consistently(origin):
+    from AdvancedMod.evidence import format_proof_link, discord_link_path
+    proof = origin + '/channels/1/2/3'
+    assert discord_link_path(proof) == ['channels', '1', '2', '3']
+    assert '[Message](https://discord.com/channels/1/2/3)' in format_proof_link(proof)

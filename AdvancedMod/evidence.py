@@ -18,6 +18,22 @@ def image_url(proof):
     return parts.scheme in {"http", "https"} and bool(parts.hostname) and not parts.username and not parts.password and parts.path.lower().endswith(IMAGE_EXTENSIONS)
 
 
+def discord_link_path(value):
+    try:
+        parts = urlsplit(value)
+        expected_port = {"http": 80, "https": 443}.get(parts.scheme)
+        if expected_port is None or parts.port not in {None, expected_port} or parts.username or parts.password:
+            return None
+        if parts.hostname not in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"}:
+            return None
+        path = parts.path.strip("/").split("/")
+        if len(path) in {3, 4} and path[0] == "channels" and all(p.isascii() and p.isdigit() for p in path[1:]):
+            return path
+    except ValueError:
+        pass
+    return None
+
+
 def format_proof_link(proof):
     if not proof or proof == "None Provided":
         return "None Provided"
@@ -26,8 +42,8 @@ def format_proof_link(proof):
         parts.port
     except ValueError:
         return proof
-    path = parts.path.strip("/").split("/")
-    if parts.scheme in {"http", "https"} and not parts.username and not parts.password and parts.port in {None, 80, 443} and parts.hostname in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} and len(path) in {3, 4} and path[0] == "channels" and all(p.isdigit() for p in path[1:]):
+    path = discord_link_path(proof)
+    if path:
         label = "Message" if len(path) == 4 else "Channel"
         return f"[{label}](https://discord.com/{'/'.join(path)}) in <#{path[2]}> (server `{path[1]}`)"
     display = f"<{proof}>" if parts.scheme in {"http", "https"} else proof
