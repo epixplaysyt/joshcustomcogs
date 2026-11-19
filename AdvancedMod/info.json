@@ -1,0 +1,8 @@
+{
+    "author": ["Josh"],
+    "name": "AdvancedMod",
+    "short": "Role-based moderation, evidence logs and DM appeals.",
+    "requirements": ["aiohttp", "Pillow"],
+    "min_bot_version": "3.5.24",
+    "end_user_data_statement": "Stores per-server settings, warning and punishment records, moderator and user IDs, appeal answers, request records, and case-to-log message references. Evidence and moderation logs are posted in configured Discord channels."
+}
