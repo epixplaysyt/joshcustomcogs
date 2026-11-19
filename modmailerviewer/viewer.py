@@ -30,7 +30,7 @@ STYLE = """
 
 def valid_origin(value, allow_http=False):
     parsed = urlsplit(value)
-    parsed.port
+    port = parsed.port
     local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
         raise ValueError("Use the public origin without a path, query or credentials.")
@@ -41,7 +41,10 @@ def valid_origin(value, allow_http=False):
         numeric_ip = False
     if not parsed.hostname or (parsed.scheme != "https" and not ((local or (numeric_ip and allow_http)) and parsed.scheme == "http")):
         raise ValueError("Use HTTPS, a loopback HTTP URL, or an HTTP IP address with allow_http enabled.")
-    return value.rstrip("/")
+    hostname = parsed.hostname.lower()
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    suffix = f":{port}" if port is not None and port != {"http": 80, "https": 443}[parsed.scheme] else ""
+    return f"{parsed.scheme}://{host}{suffix}"
 
 
 @web.middleware
@@ -198,7 +201,7 @@ class ModmailerViewer(commands.Cog):
     async def logout(self, request):
         session, _ = await self.authorize(request)
         data = await request.post()
-        origin = await self.config.public_url()
+        origin = valid_origin(await self.config.public_url(), await self.config.allow_http())
         if request.headers.get("Origin") != origin or not secrets.compare_digest(str(data.get("csrf", "")), session["csrf"]):
             raise web.HTTPForbidden(text="Invalid request origin.")
         self.sessions.pop(request.cookies.get(COOKIE, ""), None)

@@ -363,7 +363,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
                 if not reference.isdigit():
                     parts = urlsplit(reference)
                     path = parts.path.strip("/").split("/")
-                    if parts.hostname not in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} or len(path) != 4 or path[0] != "channels" or path[1] != str(ctx.guild.id) or path[2] != str(channel_id):
+                    if parts.scheme not in {"http", "https"} or parts.port not in {None, {"http": 80, "https": 443}.get(parts.scheme)} or parts.username or parts.password or parts.hostname not in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} or len(path) != 4 or path[0] != "channels" or path[1] != str(ctx.guild.id) or path[2] != str(channel_id):
                         raise ValueError
                     message_id = path[3]
                 channel = ctx.guild.get_channel(channel_id)

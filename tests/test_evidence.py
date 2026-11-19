@@ -174,3 +174,16 @@ async def test_missing_case_or_log_has_a_friendly_error(make_cog, monkeypatch, c
     monkeypatch.setattr('AdvancedMod.advmod.modlog.get_case', AsyncMock(return_value=case))
     await cog.add_evidence.callback(cog, ctx, '999', 'https://example.com/proof')
     assert any(text in ctx.send.call_args.args[0] for text in ['not found', 'no available log'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('origin', ['ftp://discord.com', 'javascript://discord.com', 'https://discord.com:8443', 'https://discord.com:notaport', 'http://discord.com:443', 'https://user:pass@discord.com'])
+async def test_log_references_reject_untrusted_schemes_ports_and_credentials(make_cog, origin):
+    cog = make_cog('AdvancedMod.advmod')
+    cog._has_level = AsyncMock(return_value=True)
+    g = guild()
+    await cog.config.guild(g).mod_channel.set(10)
+    ctx = evidence_context(g)
+    await cog.add_evidence.callback(cog, ctx, origin + '/channels/1/10/123456789012345678', 'https://example.com/proof')
+    g.get_channel.assert_not_called()
+    assert 'not found' in ctx.send.call_args.args[0]

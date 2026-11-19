@@ -106,3 +106,14 @@ async def test_only_one_wizard_can_run(make_cog):
     cog._setup_running = True
     await guided_setup(cog, ctx)
     assert 'already running' in ctx.send.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_uppercase_http_ip_binds_public_listener(make_cog, monkeypatch):
+    cog = make_cog('modmailerviewer.viewer')
+    ctx, channel = setup_context()
+    cog.start_server = AsyncMock()
+    monkeypatch.setattr(cog.expiry_loop, 'restart', Mock())
+    assert await cog.configure.callback(cog, ctx, channel, 'HTTP://203.0.113.10:8088', 8088, True)
+    assert await cog.config.host() == '0.0.0.0'
+    assert await cog.config.public_url() == 'http://203.0.113.10:8088'

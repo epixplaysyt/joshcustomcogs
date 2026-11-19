@@ -329,3 +329,19 @@ async def test_avatar_budget_cancels_slow_fetches(monkeypatch):
     monkeypatch.setattr(transcripts.asyncio, 'wait_for', short_wait)
     await transcripts.fetch_avatars(['a', 'b'], {})
     assert sorted(cancelled) == ['a', 'b']
+
+
+@pytest.mark.parametrize('value,expected', [('HTTPS://TICKETS.EXAMPLE.COM:443/', 'https://tickets.example.com'), ('HTTP://203.0.113.10:8088/', 'http://203.0.113.10:8088'), ('HTTP://LOCALHOST:80', 'http://localhost'), ('HTTPS://[2001:DB8::1]:8443', 'https://[2001:db8::1]:8443')])
+def test_origin_is_canonical(value, expected):
+    from modmailerviewer.viewer import valid_origin
+    assert valid_origin(value, allow_http=True) == expected
+
+
+@pytest.mark.asyncio
+async def test_uppercase_https_origin_still_sets_secure_oauth_cookie(make_cog):
+    cog, _, _ = await viewer(make_cog)
+    await cog.config.public_url.set('HTTPS://TICKETS.EXAMPLE.COM:443/')
+    cog.bot.get_shared_api_tokens = AsyncMock(return_value={'client_id': '123', 'client_secret': 'secret'})
+    response = await cog.login(make_mocked_request('GET', '/login'))
+    assert response.cookies['modmailer_oauth']['secure']
+    assert 'https%3A%2F%2Ftickets.example.com%2Foauth%2Fcallback' in response.location
