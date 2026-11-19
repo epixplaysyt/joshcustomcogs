@@ -345,6 +345,8 @@ class AdvancedMod(AppealsMixin, commands.Cog):
         try:
             if reference.isdigit() and int(reference) < 10**15:
                 case = await modlog.get_case(int(reference), ctx.guild, self.bot)
+                if case is None:
+                    raise ValueError
                 entry = (await self.config.guild(ctx.guild).case_logs()).get(reference)
                 if entry:
                     channel = ctx.guild.get_channel(entry["channel"])
@@ -354,7 +356,7 @@ class AdvancedMod(AppealsMixin, commands.Cog):
                         except discord.NotFound:
                             pass
                 if log_message is None:
-                    log_message = case.message
+                    log_message = getattr(case, "message", None)
             else:
                 channel_id = await self.config.guild(ctx.guild).mod_channel()
                 message_id = reference

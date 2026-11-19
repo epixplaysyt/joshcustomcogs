@@ -149,3 +149,28 @@ async def test_new_case_number_maps_to_log_and_sets_footer(make_cog, monkeypatch
     await cog.log_immediate_action(g, 'Warn', user, user, 'Reason', 'None Provided')
     assert await cog.config.guild(g).case_logs() == {'12': {'channel': 10, 'message': 987}}
     assert log.edit.call_args.kwargs['embed'].footer.text == 'Case #12'
+
+
+@pytest.mark.parametrize('scheme', ['javascript', 'data', 'file', 'ftp'])
+def test_non_web_schemes_are_not_formatted_as_trusted_discord_links(scheme):
+    from AdvancedMod.evidence import format_proof_link
+    result = format_proof_link(f'{scheme}://discord.com/channels/1/2/3')
+    assert '[Message]' not in result and '<#2>' not in result
+
+
+def test_discord_links_are_normalized():
+    from AdvancedMod.evidence import format_proof_link
+    result = format_proof_link('http://ptb.discord.com/channels/1/2/3?tracking=abc')
+    assert '[Message](https://discord.com/channels/1/2/3)' in result
+    assert 'tracking' not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', [None, SimpleNamespace(message=None)])
+async def test_missing_case_or_log_has_a_friendly_error(make_cog, monkeypatch, case):
+    cog = make_cog('AdvancedMod.advmod')
+    cog._has_level = AsyncMock(return_value=True)
+    ctx = evidence_context(guild())
+    monkeypatch.setattr('AdvancedMod.advmod.modlog.get_case', AsyncMock(return_value=case))
+    await cog.add_evidence.callback(cog, ctx, '999', 'https://example.com/proof')
+    assert any(text in ctx.send.call_args.args[0] for text in ['not found', 'no available log'])

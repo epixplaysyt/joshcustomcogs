@@ -27,9 +27,9 @@ def format_proof_link(proof):
     except ValueError:
         return proof
     path = parts.path.strip("/").split("/")
-    if parts.hostname in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} and len(path) in {3, 4} and path[0] == "channels" and all(p.isdigit() for p in path[1:]):
+    if parts.scheme in {"http", "https"} and not parts.username and not parts.password and parts.port in {None, 80, 443} and parts.hostname in {"discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com"} and len(path) in {3, 4} and path[0] == "channels" and all(p.isdigit() for p in path[1:]):
         label = "Message" if len(path) == 4 else "Channel"
-        return f"[{label}]({proof}) in <#{path[2]}> (server `{path[1]}`)"
+        return f"[{label}](https://discord.com/{'/'.join(path)}) in <#{path[2]}> (server `{path[1]}`)"
     display = f"<{proof}>" if parts.scheme in {"http", "https"} else proof
     return display
 
