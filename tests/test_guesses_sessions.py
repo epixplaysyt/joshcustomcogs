@@ -27,10 +27,10 @@ async def test_manual_close_reads_saved_session_and_clears_it(make_cog):
     cog, g, channel = await setup_session(make_cog)
     i = interaction(g)
     i.user = SimpleNamespace(roles=[], guild_permissions=discord.Permissions(administrator=True))
-    assert (await cog.config.guild(g).all())['active_session']['answer'] == 'train'
+    assert (await cog.config.guild(g).all())['session_state']['answer'] == 'train'
     await cog.guessclose.callback(cog, i)
     assert not cog.is_active
-    assert (await cog.config.guild(g).all())['active_session'] == {}
+    assert (await cog.config.guild(g).all())['session_state'] == {}
     assert channel.set_permissions.call_args.kwargs['overwrite'].send_messages is False
     assert 'train' in channel.send.call_args.kwargs['embed'].description
     assert 'successfully' in i.followup.send.call_args.args[0]
@@ -52,7 +52,7 @@ async def test_automark_reacts_and_closes_on_correct_guess_after_restore(make_co
     await cog.on_message(correct)
     correct.add_reaction.assert_awaited_once_with('✅')
     assert not cog.is_active
-    assert (await cog.config.guild(g).all())['active_session'] == {}
+    assert (await cog.config.guild(g).all())['session_state'] == {}
     assert '<@43>' in channel.send.call_args.kwargs['embed'].description
     assert channel.set_permissions.call_args.kwargs['overwrite'].send_messages is False
 
@@ -66,7 +66,41 @@ async def test_legacy_closed_none_can_be_read_and_reopened(make_cog):
     assert (await cog.config.guild(g).all())['active_session'] is None
     await cog.cog_load()
     assert not cog.is_active
-    await cog.config.guild(g).active_session.set({'answer': 'legacy', 'auto_mark': True, 'regular_cd': 120, 'winner_cd': 30})
+    await cog.config.guild(g).session_state.clear()
+    await cog.config.guild(g).set_raw('active_session', value={'answer': 'legacy', 'auto_mark': True, 'regular_cd': 120, 'winner_cd': 30})
     await cog.cog_load()
     assert cog.is_active and cog.session_answer == 'legacy'
     assert (await cog.config.guild(g).all())['role_host'] == 12
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('registered_default', [None, {}])
+async def test_reload_migrates_session_with_cached_value_or_group(make_cog, registered_default):
+    from redbot.core import Config
+    from guesses.guesses import Guesses
+    legacy = Config.get_conf(None, identifier=9283746150, cog_name='Guesses', force_registration=True)
+    legacy.register_guild(active_session=registered_default)
+    saved = dict(answer='train', auto_mark=True, regular_cd=120, winner_cd=30)
+    await legacy.guild_from_id(1).set_raw('active_session', value=saved)
+    await legacy.guild_from_id(1).set_raw('role_host', value=123)
+    cog = make_cog('guesses.guesses')
+    assert cog.config is legacy
+    await cog.cog_load()
+    assert cog.is_active and cog.session_answer == 'train'
+    data = await cog.config.guild_from_id(1).all()
+    assert data['session_state'] == saved and data['role_host'] == 123
+    assert await cog.config.guild_from_id(1).get_raw('active_session', default='missing') == 'missing'
+    reloaded = Guesses(cog.bot)
+    await reloaded.cog_load()
+    assert reloaded.is_active and reloaded.session_answer == 'train'
+
+
+@pytest.mark.asyncio
+async def test_migration_preserves_newer_session_record(make_cog):
+    cog = make_cog('guesses.guesses')
+    g = guild()
+    await cog.config.guild(g).set_raw('active_session', value=dict(answer='stale', auto_mark=True, regular_cd=120, winner_cd=30))
+    await cog.config.guild(g).session_state.set({})
+    await cog.cog_load()
+    assert not cog.is_active
+    assert (await cog.config.guild(g).all())['session_state'] == {}
