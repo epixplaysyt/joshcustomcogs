@@ -74,7 +74,7 @@ class Guesses(commands.Cog):
         self.config = Config.get_conf(self, identifier=9283746150, force_registration=True)
         default_guild = {
             "guess_channel_id": None,
-            "active_session": None,
+            "active_session": {},
             "role_host": None,
             "role_manager": None,
             "role_probation": None,
@@ -140,7 +140,7 @@ class Guesses(commands.Cog):
         overwrite = channel.overwrites_for(guild.default_role)
         overwrite.send_messages = False
         await channel.set_permissions(guild.default_role, overwrite=overwrite)
-        await self.config.guild(guild).active_session.set(None)
+        await self.config.guild(guild).active_session.clear()
 
         config_data = await self.config.guild(guild).all()
         msg_template = config_data["msg_close"]
