@@ -213,6 +213,6 @@ async def test_guess_approval_timeout_releases_pending_request(make_cog):
 @pytest.mark.asyncio
 async def test_guess_restart_restores_active_session(make_cog):
     cog = make_cog('guesses.guesses')
-    await cog.config.guild(guild()).active_session.set(dict(answer='answer', auto_mark=True, regular_cd=120, winner_cd=30))
+    await cog.config.guild(guild()).set_raw('active_session', value=dict(answer='answer', auto_mark=True, regular_cd=120, winner_cd=30))
     await cog.cog_load()
     assert cog.is_active and cog.session_answer == 'answer'
